@@ -1,0 +1,99 @@
+name: CI
+
+# Runs on every pull request, and on main after a merge. Feature branches are
+# covered through their pull request, so a same-repo branch does not build twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Evaluate, build and test in one job. The test suite builds the same
+  # activation package the build step does, so splitting them would mean
+  # downloading the whole closure twice for no extra coverage.
+  #
+  # macos-latest has been Apple silicon since macos-14, which is the
+  # architecture that can be realised without a remote builder. The Intel
+  # configuration is instantiated in the same job - see the last step.
+  build:
+    name: Build and test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      # The runner image's python3 version is not guaranteed, and the test
+      # suite uses it for every check that needs a real parser rather than a
+      # grep. Pinning it here means those checks run instead of skipping, which
+      # --strict would then fail on.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Evaluate the flake
+        run: nix flake check --all-systems
+
+      # `nix flake check` only evaluates, so it would still pass with a
+      # derivation that cannot be built. Building the real activation package
+      # is the gate that catches a renamed Home Manager option, a package
+      # dropped from nixpkgs, or a broken activation script - the whole class
+      # of breakage that otherwise surfaces on the first ./rebuild.sh.
+      #
+      # It never activates anything. `build` is not `switch`, and this repo's
+      # scripts are the only thing that ever switches.
+      - name: Build the activation package
+        run: nix build --print-build-logs .#packages.aarch64-darwin.default
+
+      # An Intel Mac cannot be built from an Apple silicon runner without a
+      # remote builder, but it can be instantiated: this evaluates the whole
+      # configuration for x86_64-darwin and computes every derivation in its
+      # closure. That is what catches a package which does not exist for Intel,
+      # which is the failure this repo has to avoid - corporate fleets still
+      # hand out Intel Macs and this configuration claims to support them.
+      - name: Instantiate the Intel configuration
+        run: nix build --dry-run .#packages.x86_64-darwin.default
+
+      # --strict turns any skipped check into a failure, so the suite cannot go
+      # green on checks that never ran because a tool was missing.
+      - name: Run the test suite
+        run: ./tests/run.sh --strict
+
+  # The scripts are pinned to bash 3.2 and BSD sed, which is what macOS ships,
+  # and the test suite only exercises the paths it happens to reach. shellcheck
+  # catches the rest - unquoted expansions, dead assignments, misused test
+  # operators. It needs no Nix and no macOS, so it runs on a cheap Linux runner
+  # and reports long before the build finishes. It does not model bash 3.2, so
+  # a clean run here is not proof of 3.2 compatibility; that stays a review
+  # concern.
+  lint:
+    name: Shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pinned rather than using whatever shellcheck the runner image ships, so
+      # a new upstream release that adds a check cannot turn CI red on its own.
+      # The checksum is verified because this step downloads an executable.
+      - name: Install shellcheck
+        run: |
+          version=0.11.0
+          sha256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          curl --fail --silent --show-error --location \
+            "https://github.com/koalaman/shellcheck/releases/download/v$version/shellcheck-v$version.linux.x86_64.tar.xz" \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz"
+          echo "$sha256  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum --check --strict
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP" \
+            --strip-components=1 "shellcheck-v$version/shellcheck"
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+
+      - name: Run shellcheck
+        run: shellcheck bootstrap.sh rebuild.sh lib/*.sh tests/*.sh

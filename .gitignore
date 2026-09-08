@@ -1,0 +1,21 @@
+# The untracked local seam.
+#
+# Everything specific to one machine or one employer lives in files of this
+# shape, and this repo is public: nothing matching them may ever be committed,
+# whether it is a stray copy someone drops in the working tree or a file a tool
+# writes here. The seam itself lives in $HOME (~/.zshrc.local,
+# ~/.gitconfig.local, ~/.gitconfig.work), not in this directory - these
+# patterns exist so that a copy landing here is caught rather than staged.
+# See README.md.
+*.local
+*.local.*
+.gitconfig.work
+gitconfig.work
+
+# macOS + nix build noise
+.DS_Store
+result
+result-*
+
+# no-mistakes local validation state - never commit in this public repo
+.no-mistakes/

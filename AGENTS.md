@@ -1,0 +1,81 @@
+# Project agent memory
+
+This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
+
+## The design rule
+
+**Nothing this repository does may affect anything outside the user's home directory.**
+
+That is the entire reason it exists, separately from a personal dotfiles repo. It
+is for Macs the user does not administer, where a configuration that renames the
+machine or prunes system packages is not merely rude but dangerous - the setup
+this one replaces would have uninstalled an employer's security agent.
+
+Every design question resolves against that rule. Concretely, this repo must never:
+
+- rename the machine, or set any `networking.*` or `system.defaults` option;
+- write to `/etc`, `/Library`, `/usr`, `/opt`, or `/Applications`;
+- install or manage Homebrew, or any other system-wide package manager;
+- manage other user accounts, sudoers, sshd, or PAM;
+- require `sudo` for a rebuild. Installing Nix is the one and only `sudo`, and
+  `bootstrap.sh` is the only place it happens - and it happens inside the
+  Determinate installer, not in this repo's own code.
+
+The rule is enforced mechanically, not by memory: `tests/safety.test.sh` fails if
+the flake grows a nix-darwin input, if a system-level option namespace appears in
+the evaluated configuration, if a managed file targets a path outside `$HOME`, if
+any tracked script gains a privilege escalation, or if anything that executes
+grows a Homebrew reference. Read that file before changing the structure of the
+configuration; it explains what each check asserts and why a grep would not do.
+
+The second rule, which follows from the first: **no employer-specific content,
+ever**. No company names, domains, hostnames, proxy addresses, certificate paths
+or internal registry URLs - not in code, not in comments, not in examples. This
+repo is public. Anything of that shape belongs in the untracked local files
+(`~/.zshrc.local`, `~/.gitconfig.local`, `~/.gitconfig.work`); README.md
+documents that seam.
+
+## Working here
+
+- **Never activate a configuration while testing.** `nix flake check`,
+  `nix build .#default` and `nix eval` are safe; `home-manager switch`,
+  `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
+  activation package is not activating it.
+- Run the suite with `./tests/run.sh` (`--strict` in CI, where a skipped check is
+  a failure). `tests/lib.sh` documents the house style.
+- The shell scripts must stay **bash 3.2 and BSD sed** compatible: macOS ships
+  bash 3.2 and GNU tooling is not available. CI runs shellcheck over
+  `bootstrap.sh`, `rebuild.sh`, `lib/*.sh` and `tests/*.sh`.
+- The scripts are bash; an agent's own shell here is often zsh. Test a library
+  with `/bin/bash -c '. lib/x.sh; fn'`, never by sourcing it into your own shell.
+- `flake.nix` has exactly two adjustable values, `user` and `homeDirectory`, one
+  line each. `lib/flake-settings.sh` is the single definition of how they are
+  read and rewritten; both scripts and the tests go through it. The architecture
+  is deliberately **not** adjustable - both Darwin systems are built from the
+  same source and the scripts detect which one they are on.
+- Wherever a script offers a default, the default must be the **machine's current
+  reality**, never the value already in the config. The repo this one replaces
+  offered its configured machine name as the default, so pressing Enter silently
+  renamed the Mac.
+
+## Sharp edges found the hard way
+
+- `ghostty` in nixpkgs is Linux-only. On macOS the attribute is `ghostty-bin`.
+  `tests/packages.test.sh` catches this class of mistake for both architectures.
+- Home Manager's Darwin app handling flipped default at `stateVersion` 25.11:
+  `copyApps` (needs the macOS App Management permission, and aborts activation
+  without it) instead of `linkApps`. This repo pins `linkApps` on purpose;
+  `home.nix` and README.md explain the trade.
+- `programs.zsh.initContent` defaults to order 1000, but Home Manager emits shell
+  aliases at 1150 and syntax highlighting at 1200. The `~/.zshrc.local` include
+  is at `lib.mkOrder 1500` so it genuinely runs last.
+- `nix eval` on this flake prints an upstream warning about an `options.json`
+  derivation built without proper context. It comes from Home Manager's own
+  manual module and is not caused by anything here.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
