@@ -28,7 +28,7 @@ esac
 # work repository and a personal one.
 make_home() {
   local generation home
-  generation=$(nix build --no-link --print-out-paths ".#packages.$SYSTEM.default" 2>/dev/null) \
+  generation=$(nix build --no-link --print-out-paths "$ROOT#packages.$SYSTEM.default" 2>/dev/null) \
     || return 1
   home=$(dotfiles_test_tmproot dotfiles-git)
   mkdir -p "$home/.config/git" "$home/work/repo" "$home/personal/repo"
@@ -131,14 +131,14 @@ test_a_preexisting_gitconfig_still_wins() {
   printf '[user]\n\temail = default@example.invalid\n' >"$home/.gitconfig.local"
   printf '[user]\n\temail = pre-existing@example.invalid\n' >"$home/.gitconfig"
 
-  # Asserted because it is surprising and because HOW-TO.md says so. Home
+  # Asserted because it is surprising and because README.md says so. Home
   # Manager writes the XDG config, ~/.config/git/config, and git reads
   # ~/.gitconfig afterwards - so a machine that already had one keeps using it.
   # This test exists to keep that documented behaviour true rather than to
   # endorse it; `git config --show-origin` is what tells a confused user which
   # file won.
   assert_eq "$(resolve "$home" personal/repo user.email)" pre-existing@example.invalid \
-    "a pre-existing ~/.gitconfig no longer takes precedence - HOW-TO.md says it does"
+    "a pre-existing ~/.gitconfig no longer takes precedence - README.md says it does"
 
   pass "git: a pre-existing ~/.gitconfig still takes precedence, as documented"
 }

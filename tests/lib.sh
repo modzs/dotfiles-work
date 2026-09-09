@@ -144,3 +144,11 @@ dotfiles_test_self() {
   local self=${BASH_SOURCE[1]}
   printf '%s\n' "${self#"$ROOT"/}"
 }
+
+# Evaluate a nix expression against the flake at $ROOT, with proper error handling.
+# Usage: nix_eval 'expression' [extra nix args...]
+nix_eval() {
+  local expr=$1
+  shift
+  nix eval --raw "$ROOT#$expr" "$@"
+}

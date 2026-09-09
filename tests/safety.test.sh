@@ -108,8 +108,8 @@ test_configuration_has_no_system_level_options() {
   # unsettable. `launchd` and `services` are deliberately absent from the list:
   # Home Manager defines those itself and they write per-user agents into
   # ~/Library/LaunchAgents, which is inside the home directory.
-  present=$(nix eval --raw \
-    ".#homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".options" \
+  present=$(nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".options" \
     --apply 'o:
       let banned = [ "networking" "system" "homebrew" "nix-homebrew" "users" "security" "environment" "power" ];
       in builtins.concatStringsSep " " (builtins.filter (n: builtins.hasAttr n o) banned)' \
@@ -135,8 +135,8 @@ test_every_managed_file_target_is_inside_home() {
   # absolute target, or one climbing out with "..", is the only way a managed
   # file could land somewhere else - so those are what this looks for, in the
   # evaluated configuration rather than in the source that produced it.
-  escaping=$(nix eval --raw \
-    ".#homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.home.file" \
+  escaping=$(nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.home.file" \
     --apply 'files:
       let
         targets = map (f: f.target) (builtins.attrValues files);
@@ -166,8 +166,8 @@ test_home_directory_matches_the_declared_one() {
   declared=$(flake_settings_home_directory "$ROOT/flake.nix") \
     || fail "could not read the configured home directory from flake.nix"
 
-  evaluated=$(nix eval --raw \
-    ".#homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.home.homeDirectory" \
+  evaluated=$(nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.home.homeDirectory" \
     2>/dev/null) \
     || fail "could not evaluate the configuration's home directory"
 
@@ -239,27 +239,32 @@ PY
 # --- nothing that executes here knows about Homebrew --------------------------
 
 test_nothing_executable_references_homebrew() {
-  local self hits
+  local generation hits
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "Homebrew path check (nix not found)"
+    return 0
+  fi
+
   # Homebrew is a system-wide package manager rooted outside the home
   # directory, and the setup this repo replaces drove it with
   # `cleanup = "zap"`, which uninstalls anything not listed - a security agent
   # installed by an employer's IT included. Nothing that runs here may grow a
   # path into it or a call to it.
   #
-  # Scanned: everything that executes or is evaluated - the Nix files, the
-  # shell scripts, the locked input graph, the CI workflows. Prose is not
-  # scanned, because prose is where this repo has to be able to say the word in
-  # order to explain itself. This file excludes itself for the same reason: it
-  # has to spell out the strings it is looking for.
-  self=$(dotfiles_test_self)
-  hits=$(dotfiles_tracked_except "$self" '*.nix' '*.sh' 'flake.lock' '.github' \
-    | xargs -0 grep -lE '/opt/homebrew|/usr/local/Homebrew|(^|[^[:alnum:]_./-])brew([[:space:]]|$)|nix-homebrew|homebrew[[:space:]]*=' \
-    || true)
+  # This checks the built artifact - the activation package including the
+  # activate script, home-files tree, and profile - not source code. A reference
+  # in source that is dead code or in a comment is not a problem; a reference
+  # in the generated activation bundle would cause the configuration to fail
+  # on a machine that has no Homebrew installed.
+  generation=$(nix build --no-link --print-out-paths "$ROOT#packages.$SYSTEM.default" 2>/dev/null) \
+    || fail "could not build the activation package"
+
+  hits=$(grep -r -E '/opt/homebrew|/usr/local/Homebrew' "$generation" 2>/dev/null || true)
 
   [ -z "$hits" ] \
-    || fail "these files reference Homebrew: $(printf '%s' "$hits" | tr '\n' ' ')"
+    || fail "the built activation package contains Homebrew paths: $hits"
 
-  pass "repo: nothing that executes references Homebrew or a Homebrew path"
+  pass "artifact: the activation package contains no Homebrew paths"
 }
 
 test_flake_pulls_in_no_system_configuration_tool

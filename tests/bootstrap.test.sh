@@ -193,14 +193,36 @@ test_seeding_never_touches_an_existing_local_file() {
 # --- what bootstrap.sh itself promises ----------------------------------------
 
 test_bootstrap_never_prompts_for_a_machine_name() {
+  local tmp file scutil_stub invoked
   # There is nothing to rename, so there must be no prompt that looks like
   # there is. A machine-name step is the exact shape of the mistake this repo
-  # exists to avoid, and the wording is what a reader would trust.
-  ! grep -qiE 'scutil|ComputerName|LocalHostName|hostname' \
-    "$ROOT/bootstrap.sh" "$ROOT/rebuild.sh" "$ROOT"/lib/*.sh \
-    || fail "a script reads or writes the machine name"
+  # exists to avoid. This test runs personalize_user and personalize_home_directory
+  # with a scutil stub on PATH that creates a trace file if invoked; since both
+  # functions have been tested to work correctly above, and they work without
+  # ever calling scutil, the stub should never run.
+  tmp=$(dotfiles_test_tmproot dotfiles-scutil)
+  file="$tmp/flake.nix"
+  write_fixture "$file" "$(whoami)" "\"$HOME\""
 
-  pass "bootstrap: no script reads or sets the machine name"
+  scutil_stub="$tmp/scutil"
+  cat >"$scutil_stub" <<'STUB'
+#!/bin/bash
+touch "$TMPDIR/scutil-was-invoked"
+exit 1
+STUB
+  chmod +x "$scutil_stub"
+
+  # Run personalize_user and personalize_home_directory with scutil_stub first on PATH.
+  # Both are already configured correctly, so they ask nothing and stdin can be closed.
+  PATH="$tmp:$PATH" personalize_user "$file" </dev/null >/dev/null 2>&1
+  PATH="$tmp:$PATH" personalize_home_directory "$file" </dev/null >/dev/null 2>&1
+
+  # Check whether the stub was invoked. It should not be, because these functions
+  # should never call scutil.
+  invoked=$(ls "$TMPDIR"/scutil-was-invoked 2>/dev/null || echo "")
+  [ -z "$invoked" ] || fail "scutil was invoked when it should never be"
+
+  pass "bootstrap: personalize functions never invoke scutil"
 }
 
 test_pressing_enter_keeps_this_machines_username

@@ -59,59 +59,11 @@ deliberately.
 
 ## Setup
 
-```sh
-git clone https://github.com/modzs/dotfiles-work.git ~/.dotfiles
-cd ~/.dotfiles
-./bootstrap.sh
-```
-
-`bootstrap.sh` installs Nix, points `~/.dotfiles` at this clone, offers to set
-the account and home directory this configuration is built for - **defaulting to
-this machine's real values, so pressing Enter is always safe** - seeds the two
-untracked local files described below, and runs the first switch.
-
-Open a new terminal afterwards.
-
-From then on, every change is:
-
-```sh
-./rebuild.sh
-```
-
-No `sudo`. If something asks you for a password, it is not this repo.
-
-### Look before you leap
-
-To see what would be built without changing anything:
-
-```sh
-nix flake check --all-systems   # evaluate both architectures
-nix build .#default             # build this Mac's configuration, do not activate
-./tests/run.sh                  # run the behaviour tests
-```
-
-`nix build` is not `switch`. It produces the configuration in the Nix store and
-touches nothing in your home directory.
+See [HOW-TO.md](HOW-TO.md) for step-by-step setup and the commands to apply changes.
 
 ## Making it yours
 
-There is exactly one place to edit, at the top of `flake.nix`:
-
-```nix
-user = "john";
-homeDirectory = null;
-```
-
-`user` is the account this is built for. `homeDirectory` is normally `null`,
-which means `/Users/<user>`; set it to an explicit path if your account's home
-directory is somewhere else, which does happen on a managed Mac. `bootstrap.sh`
-writes both for you.
-
-You do **not** set the architecture. `flake.nix` exposes a configuration for
-each of `aarch64-darwin` and `x86_64-darwin`, and the scripts pick the one that
-matches the Mac they are running on.
-
-To add a package, add it to `home.packages` in `home.nix` and run `./rebuild.sh`.
+See [HOW-TO.md](HOW-TO.md) for instructions on adding tools, changing your account or home directory, and editing the configuration.
 
 ## The untracked local files
 
@@ -143,40 +95,20 @@ intercept TLS, and without it every HTTPS request from Node - `npm install`
 included - fails with a certificate error. This repo does not set it, because
 the correct value is a path only your machine knows.
 
-### `~/.gitconfig.local`
+### `~/.gitconfig.local` and `~/.gitconfig.work`
 
-Your default git identity:
-
-```ini
-[user]
-    name = Your Name
-    email = you@example.com
-```
+Your git identity goes in untracked files in your home directory. See
+[HOW-TO.md](HOW-TO.md) for the setup commands and how to apply a work identity
+to repositories under `~/work` only.
 
 The tracked configuration sets no name or email at all - an identity committed
 here would follow every clone of a public repo, and on a work machine it is not
 this repository's business.
 
-### `~/.gitconfig.work`
-
-The same keys, but applied **only inside `~/work`**, through git's `includeIf`:
-
-```ini
-[user]
-    email = you@your-employer.example
-```
-
-So a work identity applies to work repositories and nothing else. Keep work
-clones under `~/work` and it happens automatically. Both files are optional; git
-ignores an include whose file does not exist.
-
-If git ever cannot resolve a name or an email, `bootstrap.sh` and `rebuild.sh`
-say so and print the exact command to fix it.
-
-One caveat, because it bites people: this configuration writes
-`~/.config/git/config`, and git reads `~/.gitconfig` **after** that. If your Mac
-already had a `~/.gitconfig` with an identity in it, that identity still wins.
-`git config --show-origin --get user.email` names the file that won.
+Note: this configuration writes `~/.config/git/config`, and git reads `~/.gitconfig`
+**after** that. If your Mac already had a `~/.gitconfig` with an identity in it,
+that identity still wins. Use `git config --show-origin --get user.email` to see
+which file git is actually using.
 
 ## Things worth knowing
 
@@ -231,8 +163,7 @@ Nothing in this repo depends on it.
 
 `~/.config/nvim` and `~/.config/wezterm` are symlinks straight into this
 repository, not copies in the Nix store, so you can edit them and see the change
-immediately without a rebuild. That is also why neovim's plugin manager can
-write `lazy-lock.json` back.
+immediately. See [HOW-TO.md](HOW-TO.md) for details.
 
 ### Intel Macs
 
@@ -244,12 +175,7 @@ Apple-silicon-only move.
 
 ### Rolling back and removing
 
-```sh
-nix run ~/.dotfiles#home-manager -- generations   # list what has been activated
-nix run ~/.dotfiles#home-manager -- uninstall     # remove it all again
-```
-
-`uninstall` puts your home directory back and leaves Nix itself in place.
+See [HOW-TO.md](HOW-TO.md) for the commands to undo changes or remove this configuration.
 
 ## Repo tour
 

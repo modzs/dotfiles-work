@@ -37,8 +37,8 @@ test_every_package_supports_both_architectures() {
   # package which builds here does not exist there. Both directions matter:
   # a corporate fleet still hands out Intel Macs.
   for system in aarch64-darwin x86_64-darwin; do
-    unsupported=$(nix eval --raw \
-      ".#homeConfigurations.\"$(dotfiles_config_name "$system")\"" \
+    unsupported=$(nix_eval \
+      "homeConfigurations.\"$(dotfiles_config_name "$system")\"" \
       --apply "cfg:
         let
           unsupported = builtins.filter
@@ -73,12 +73,12 @@ test_gui_apps_are_linked_rather_than_copied() {
   # whose privacy settings someone else administers, that permission may not be
   # grantable at all - and losing the entire switch over two terminal emulators
   # is the wrong trade. See home.nix and README.md.
-  link=$(nix eval --raw \
-    ".#homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.targets.darwin.linkApps.enable" \
+  link=$(nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.targets.darwin.linkApps.enable" \
     --apply 'v: if v then "true" else "false"' 2>/dev/null) \
     || fail "could not evaluate targets.darwin.linkApps.enable"
-  copy=$(nix eval --raw \
-    ".#homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.targets.darwin.copyApps.enable" \
+  copy=$(nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\".config.targets.darwin.copyApps.enable" \
     --apply 'v: if v then "true" else "false"' 2>/dev/null) \
     || fail "could not evaluate targets.darwin.copyApps.enable"
 
@@ -109,7 +109,7 @@ test_gui_app_bundles_resolve_an_executable() {
   # The built generation, because the question is about the artifact, not the
   # source. This is the same derivation CI builds, so it is already in the
   # store by the time the suite runs.
-  generation=$(nix build --no-link --print-out-paths ".#packages.$SYSTEM.default" 2>/dev/null) \
+  generation=$(nix build --no-link --print-out-paths "$ROOT#packages.$SYSTEM.default" 2>/dev/null) \
     || fail "could not build the activation package"
   apps="$generation/home-files/Applications/Home Manager Apps"
   [ -d "$apps" ] \

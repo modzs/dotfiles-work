@@ -93,7 +93,7 @@ in
       # when the network intercepts TLS. It is never committed, and an absent
       # file is a normal state. See README.md.
       (lib.mkOrder 1500 ''
-        [[ -f ~/.zshrc.local ]] && source ~/.zshrc.local
+        if [[ -f ~/.zshrc.local ]]; then source ~/.zshrc.local; fi
       '')
     ];
     shellAliases = {
@@ -102,7 +102,6 @@ in
       "push" = "git push";
       "pull" = "git pull";
       "m" = "git switch main";
-      "cc" = "claude --dangerously-skip-permissions";
     };
   };
 
