@@ -103,12 +103,10 @@ git config --show-origin --get user.email
 `rebuild.sh` warns you if git would have to invent an identity, and prints the
 command that fixes it.
 
-**If your identity is not the one you just set**, you probably already have a
-`~/.gitconfig`. This configuration writes `~/.config/git/config`, and git reads
-`~/.gitconfig` *after* that - so a file the machine already had wins over both
-`~/.gitconfig.local` and `~/.gitconfig.work`. The command above names the file
-that won. Move the keys out of `~/.gitconfig` into `~/.gitconfig.local` and the
-seam works as described.
+**If your identity is not the one you just set**, see the
+`~/.gitconfig-takes-precedence` note in [README.md](README.md#the-untracked-local-files)
+for an explanation of how git searches your configuration files. Move the keys
+out of `~/.gitconfig` into `~/.gitconfig.local` and the seam works as described.
 
 ---
 
