@@ -42,7 +42,13 @@ documents that seam.
   `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
   activation package is not activating it.
 - Run the suite with `./tests/run.sh` (`--strict` in CI, where a skipped check is
-  a failure). `tests/lib.sh` documents the house style.
+  a failure). It works from any directory, and there is a test count behind that
+  claim: every test file declares `dotfiles_test_expect <n>`, and `test_summary`
+  fails if a different number of checks actually ran. Adding a test means moving
+  the number beside it. That mechanism exists because a helper once handed its
+  consumers paths that did not resolve outside the repository root, six safety
+  checks silently stopped running, and the suite reported a smaller total that
+  read like success. `tests/lib.sh` documents the rest of the house style.
 - The shell scripts must stay **bash 3.2 and BSD sed** compatible: macOS ships
   bash 3.2 and GNU tooling is not available. CI runs shellcheck over
   `bootstrap.sh`, `rebuild.sh`, `lib/*.sh` and `tests/*.sh`.

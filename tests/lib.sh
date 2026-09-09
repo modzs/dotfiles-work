@@ -41,13 +41,42 @@ skip() {
   printf 'skip - %s\n' "$1"
 }
 
+# How many checks this file must account for. Declared at the top of every test
+# file, next to the tests themselves, so adding a test forces the number beside
+# it to move.
+#
+# This exists because of a real failure: a helper handed its consumers paths
+# that did not resolve outside the repository root, six checks in the safety
+# suite stopped running, and the suite reported "35 ok" instead of "41 ok".
+# A smaller number of passing checks reads like success - nothing in "35 ok"
+# says that six of them are missing - and the suite whose whole job is to
+# enforce this repo's safety rule must not be able to quietly cover less.
+DOTFILES_TEST_EXPECTED=""
+
+# dotfiles_test_expect <n>
+dotfiles_test_expect() {
+  DOTFILES_TEST_EXPECTED=$1
+}
+
 # Call once at the end of a test file, after the last test function.
 test_summary() {
+  local accounted=$((DOTFILES_TEST_PASSED + DOTFILES_TEST_SKIPPED))
+
   printf '%d ok, %d skipped\n' "$DOTFILES_TEST_PASSED" "$DOTFILES_TEST_SKIPPED"
   # tests/run.sh sets this to aggregate counts across test files.
   if [ -n "${DOTFILES_TEST_TALLY:-}" ]; then
     printf '%d %d\n' "$DOTFILES_TEST_PASSED" "$DOTFILES_TEST_SKIPPED" >>"$DOTFILES_TEST_TALLY"
   fi
+
+  # Checked before --strict, because a file that ran too few checks has a worse
+  # problem than a skip, and its own count is the only thing that can notice.
+  if [ -z "$DOTFILES_TEST_EXPECTED" ]; then
+    fail "this test file declares no dotfiles_test_expect count"
+  fi
+  if [ "$accounted" != "$DOTFILES_TEST_EXPECTED" ]; then
+    fail "ran $accounted check(s), expected $DOTFILES_TEST_EXPECTED - a check was lost, not passed"
+  fi
+
   if [ "$DOTFILES_TEST_STRICT" = 1 ] && [ "$DOTFILES_TEST_SKIPPED" -gt 0 ]; then
     fail "--strict: $DOTFILES_TEST_SKIPPED check(s) skipped"
   fi
@@ -130,13 +159,31 @@ dotfiles_config_name() {
 # $1. A test that has to name the strings it forbids would otherwise match its
 # own source; passing its own path here is how it says so out loud.
 #
+# The paths are printed ABSOLUTE. `git ls-files` names them relative to the
+# repository, but the caller consuming them - an `xargs grep`, an `xargs
+# python3` - runs in whatever directory the suite was invoked from, which is
+# not necessarily the repository. Emitting repository-relative paths made those
+# consumers fail with "No such file or directory" for every file whenever
+# ./tests/run.sh was started from anywhere else, which is exactly how the
+# installed layout invokes it: the repo lives at ~/.dotfiles and the user is in
+# some project directory. Prefixing here rather than at each call site keeps
+# that from having to be remembered again.
+#
+# awk, not sed: $ROOT is a path, and a sed replacement would have to escape
+# whatever delimiter it chose out of it. awk takes it through -v, where it is
+# data and never pattern.
+#
 # Line-based, so a tracked path containing a newline would be mishandled. This
 # repo has none, and `git ls-files` output is checked against the repository
 # index rather than the filesystem, so one cannot appear without a commit.
 dotfiles_tracked_except() {
   local exclude=$1
   shift
-  (cd "$ROOT" && git ls-files -- "$@" | grep -v -x -F "$exclude" | tr '\n' '\0')
+  (cd "$ROOT" \
+    && git ls-files -- "$@" \
+    | grep -v -x -F "$exclude" \
+    | awk -v root="$ROOT" '{ print root "/" $0 }' \
+    | tr '\n' '\0')
 }
 
 # The path of the calling test file, relative to the repository root.

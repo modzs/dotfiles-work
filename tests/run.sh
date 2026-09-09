@@ -27,5 +27,14 @@ while read -r p s; do
   skipped=$((skipped + s))
 done <"$TALLY"
 
-printf '\n# total: %d ok, %d skipped\n' "$passed" "$skipped"
+# The verdict, not just the arithmetic. A run that lost checks still prints a
+# plausible-looking count - "35 ok" says nothing about the six that never ran -
+# so the line says outright whether the suite passed. Each file asserts its own
+# expected count (dotfiles_test_expect), which is what turns a lost check into
+# a failure rather than a smaller total.
+if [ "$status" = 0 ]; then
+  printf '\n# total: %d ok, %d skipped\n' "$passed" "$skipped"
+else
+  printf '\n# FAILED - %d ok, %d skipped before the failure\n' "$passed" "$skipped"
+fi
 exit "$status"

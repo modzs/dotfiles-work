@@ -27,6 +27,11 @@ set -u
 
 dotfiles_test_parse_args "$@"
 
+# Every check this file must account for. test_summary fails if the number
+# that actually ran differs, so a check lost to a broken helper cannot show up
+# as a smaller, healthy-looking "ok" total. Move this when you add a test.
+dotfiles_test_expect 10
+
 write_fixture() {
   local path=$1 user=$2 home=$3
   cat >"$path" <<FIXTURE

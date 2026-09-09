@@ -13,6 +13,11 @@ set -u
 
 dotfiles_test_parse_args "$@"
 
+# Every check this file must account for. test_summary fails if the number
+# that actually ran differs, so a check lost to a broken helper cannot show up
+# as a smaller, healthy-looking "ok" total. Move this when you add a test.
+dotfiles_test_expect 5
+
 # A sandbox with a fake HOME and a fake repository inside it.
 make_sandbox() {
   local root

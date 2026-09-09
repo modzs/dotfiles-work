@@ -15,6 +15,11 @@ set -u
 
 dotfiles_test_parse_args "$@"
 
+# Every check this file must account for. test_summary fails if the number
+# that actually ran differs, so a check lost to a broken helper cannot show up
+# as a smaller, healthy-looking "ok" total. Move this when you add a test.
+dotfiles_test_expect 11
+
 # A minimal file with the same two lines flake.nix carries. Using a fixture
 # rather than a copy of flake.nix keeps a failure here pointing at the parser
 # instead of at whatever else the real file happens to contain - and the round
