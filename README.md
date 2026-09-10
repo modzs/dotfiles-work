@@ -59,10 +59,15 @@ There is one thing it *will* replace, and it is worth being exact about. The
 step passes `--force`, so a cask is allowed to claim whatever is already
 sitting where it installs. For the two application casks on the list in
 `home.nix` - today WezTerm and Ghostty - that means an app of that name already
-in `/Applications` is replaced by Homebrew's copy, however it got there. The
-third, `claude-code`, installs no app: what it can overwrite is a `claude`
-executable on Homebrew's `bin` path. Nothing whose name is not on that list is
-touched at all.
+in `/Applications` is replaced by Homebrew's copy, however it got there.
+
+The third, `claude-code`, installs no app: it puts a `claude` command on
+Homebrew's `bin` path, and `--force` does not overwrite for it. A symlink
+already there is only replaced when it points into that cask's own storage;
+anything else - a real file, or a link to something unrelated - makes the
+install refuse rather than clobber it, which fails the rebuild and keeps
+failing until you move the file aside yourself. Nothing whose name is not on
+that list is touched at all.
 
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns
@@ -148,8 +153,11 @@ Services find them.
 None of your packages update on their own. This is meant to be installed once
 and left alone, and an update is something you do deliberately. That holds for
 both halves: a rebuild installs whatever on the Homebrew list is missing and
-leaves what is already installed at the version it is, so upgrading a formula
-or a cask stays something you ask for with `brew`.
+skips what is already installed, leaving it at the version it is, so upgrading a
+formula or a cask on the list stays something you ask for with `brew`. The
+exception is a dependency - installing a new name may bring an outdated library
+it needs up with it, which is Homebrew resolving its own requirements rather
+than anything this configuration asks for.
 
 Homebrew itself is the exception, and it is not this repo's doing. A rebuild
 asks Homebrew to install, and unless you have exported `HOMEBREW_NO_AUTO_UPDATE`

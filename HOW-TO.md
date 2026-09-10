@@ -6,9 +6,12 @@ repository is and what it deliberately does not touch, read
 
 Everything this repository runs runs as you, never as root. If `./bootstrap.sh`
 or `./rebuild.sh` ever asks for a password, something is wrong - stop and check
-what you are running. Two things this file tells you to install *before* it,
-Homebrew and Nix, do ask for one; that is their installers, not this repo, and
-it is the reason both are your decision rather than a step it takes for you.
+what you are running. The one exception is `./bootstrap.sh`'s step 1, which
+installs Nix: that prompt comes from the Determinate installer it runs, not from
+this repo's own code, and it is the single sudo in the whole setup. Homebrew is
+the one thing this file asks you to install beforehand, and its installer asks
+for a password too - again its own, which is exactly why installing it is your
+decision rather than a step this repo takes for you.
 
 ---
 
@@ -85,8 +88,11 @@ It applies both halves. Home Manager writes your home directory, then the last
 step hands the generated Brewfile to `brew bundle install`, so a formula or cask
 you added is installed by the same command. That step only ever installs what is
 missing - it never uninstalls, so anything you installed with `brew` by hand
-stays where it is, and it never upgrades, so anything already installed stays at
-the version it is on.
+stays where it is. A name on the lists that is already installed is skipped
+outright, so it stays at the version it is on. The one thing that can still move
+is a *dependency*: when Homebrew installs something new off the lists, it may
+upgrade an outdated library that install needs. Nothing here asks it to, and
+nothing on the lists is upgraded just for being there.
 
 The Homebrew step runs on every rebuild, not only when the lists change, so a
 rebuild does need the network. Even when everything on the lists is already

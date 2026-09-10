@@ -203,9 +203,15 @@ test_the_homebrew_step_installs_and_cannot_remove() {
 
   # Every way `brew bundle` can be made to uninstall something. The subcommand
   # is `install`, asserted above; these are the flags that would turn even that
-  # into a removal, plus `--global`, which is the mode that lets
-  # $HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP switch cleanup on from the
-  # environment rather than from this repository.
+  # into a removal, plus `--global`, which is banned for a different reason: it
+  # would have Homebrew read a Brewfile off its own search path instead of the
+  # generated one this step passes with --file, so the list being applied would
+  # no longer be the list home.nix declares.
+  #
+  # `--global` is NOT what gates the two cleanup environment variables, whatever
+  # Homebrew's help text implies. See
+  # test_the_homebrew_step_neutralizes_the_cleanup_variables below, which is
+  # where that mechanism is described and checked.
   for word in cleanup --cleanup --force-cleanup --zap -g --global uninstall remove; do
     case " $argv " in
       *" $word "*) fail "the Homebrew step passes $word, which can uninstall software the user installed by hand" ;;
