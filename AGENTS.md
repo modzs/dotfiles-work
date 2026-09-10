@@ -4,29 +4,88 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## The design rule
 
-**Nothing this repository does may affect anything outside the user's home directory.**
+**This repository must not reconfigure a Mac the user does not administer.**
 
 That is the entire reason it exists, separately from a personal dotfiles repo. It
 is for Macs the user does not administer, where a configuration that renames the
 machine or prunes system packages is not merely rude but dangerous - the setup
 this one replaces would have uninstalled an employer's security agent.
 
-Every design question resolves against that rule. Concretely, this repo must never:
+The rule used to be stated more strictly, as "nothing this repository does may
+affect anything outside the user's home directory", and for a while that was
+literally true. It is not any more. On the owner's explicit instruction this
+configuration now drives Homebrew: `home.nix` generates a Brewfile and a Home
+Manager activation step runs `brew bundle install` against it on every switch,
+which writes into Homebrew's prefix and puts casks in `/Applications`. That is
+the one place the boundary has moved, it moved deliberately, and the honest
+statement of what is left is the heading above.
+
+What follows from it, and still holds without exception - this repo must never:
 
 - rename the machine, or set any `networking.*` or `system.defaults` option;
-- write to `/etc`, `/Library`, `/usr`, `/opt`, or `/Applications`;
-- install or manage Homebrew, or any other system-wide package manager;
+- write to `/etc`, `/Library`, `/usr`, or `/opt`, other than by asking an
+  existing Homebrew to install what the Brewfile lists;
+- **install, update or remove Homebrew itself**, or any other system-wide
+  package manager. Homebrew is the user's, installed by hand; this repo finds it
+  and fails with an explanation when it is absent;
+- **ask Homebrew to remove anything.** There is no `cleanup`, no `--zap`, no
+  `brew uninstall`, and there must never be one; the step also unsets the two
+  `HOMEBREW_BUNDLE_*_CLEANUP` variables, which exist only to turn a bundle
+  install destructive. On this machine Homebrew is the user's general-purpose
+  package manager, so a declarative cleanup would delete software installed by
+  hand for reasons this repo knows nothing about - a security agent among them.
+  This is the single most dangerous change anyone could make here.
+  State it as "asks for", not as "nothing is ever removed": every `brew install`
+  ends with Homebrew's own periodic cleanup, which about monthly runs
+  `autoremove`, so a rebuild that installs something can be the command that
+  triggers it. That is Homebrew's standing behaviour on the user's own machine,
+  it reaches only unrequested formula dependencies and never casks, and it is
+  deliberately left alone - suppressing it would reverse a Homebrew preference
+  of the user's, the same overreach as clearing `HOMEBREW_NO_AUTO_UPDATE`. The
+  two `_CLEANUP` variables are different in kind, which is why those are unset;
 - manage other user accounts, sudoers, sshd, or PAM;
-- require `sudo` for a rebuild. Installing Nix is the one and only `sudo`, and
-  `bootstrap.sh` is the only place it happens - and it happens inside the
-  Determinate installer, not in this repo's own code.
+- run `sudo`, or prompt for a password, in any of its own code. Installing Nix
+  is the one and only `sudo`, `bootstrap.sh` is the only place it happens, and
+  it happens inside the Determinate installer rather than here. Installing
+  Homebrew needs a password too, which is exactly why this repo does not do it.
+  One thing this repo drives can still produce a prompt, and the claim has to be
+  stated that way rather than as "a rebuild never asks": `--force` lets a cask
+  replace an app already in `/Applications`, and when that app is owned by
+  someone else Homebrew falls back to `sudo` to take ownership before removing
+  it. That is Homebrew asking, in a step this repo asked for - so the promise is
+  that nothing here runs `sudo` itself, not that no prompt can ever appear;
 
-The rule is enforced mechanically, not by memory: `tests/safety.test.sh` fails if
+The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
 the evaluated configuration, if a managed file targets a path outside `$HOME`, if
-any tracked script gains a privilege escalation, or if anything that executes
-grows a Homebrew reference. Read that file before changing the structure of the
-configuration; it explains what each check asserts and why a grep would not do.
+any tracked script gains a privilege escalation, if any script this repo runs
+invokes `brew` or carries a Homebrew installer URL in its text, or if the built
+artifact embeds a Homebrew path other than the two an existing `brew` lives at.
+Both that check and the privilege one tokenize rather than grep, so *explaining*
+Homebrew or `sudo` in a comment is fine and several of these scripts do;
+invoking one is what fails. The Homebrew one goes further and looks at position,
+so naming a path is allowed and only a command word counts - `lib/homebrew-present.sh`
+has to ask whether `/opt/homebrew/bin/brew` exists. It is run against fixture
+scripts with known answers, so narrowing it cannot quietly turn it into a no-op.
+It decides that question in the direction that fails closed: a `brew` token
+counts as an invocation unless something makes it an argument, and the list of
+those is short and belongs to this repo. The earlier shape asked the opposite,
+listing the tokens after which `brew` counted as a command, and `if brew`,
+`while brew`, `exec brew` and `command brew` all walked through the gaps in that
+list. Its remaining edge is indirection: a path held in a variable and run as
+`"$BREW" install` is still invisible to it. What keeps that from mattering is
+that no script here holds such a path - `dotfiles_homebrew_require` reports what
+it found instead of returning it - not that the check would notice. `tests/homebrew.test.sh` runs the Homebrew step
+against a recording stand-in for `brew` and fails if it passes anything that
+could uninstall or upgrade, if it lets either Homebrew cleanup variable through
+from the environment, if a missing Homebrew produces a raw error rather than an
+explanation, or if a tool ends up installed by both Nix and Homebrew. Where
+`brew` is gets answered twice - `lib/homebrew-present.sh` for bootstrap's
+preflight, which turns a Mac without Homebrew away before Nix is installed, and
+the activation step in `home.nix` - so the same file runs both against the same
+prefixes and fails if their verdicts differ. Change one, change the other.
+Read both files before changing the structure of the configuration; they explain
+what each check asserts and why a grep would not do.
 
 The second rule, which follows from the first: **no employer-specific content,
 ever**. No company names, domains, hostnames, proxy addresses, certificate paths
@@ -59,10 +118,13 @@ documents that seam.
   login shell would really see and warns when it would see nothing. It names
   that file and never writes to it; a check that cannot answer must read as
   unverified, never as fine.
-- **Never activate a configuration while testing.** `nix flake check`,
-  `nix build .#default` and `nix eval` are safe; `home-manager switch`,
+- **Never activate a configuration while testing, and no test may.** `nix flake
+  check`, `nix build .#default` and `nix eval` are safe; `home-manager switch`,
   `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
-  activation package is not activating it.
+  activation package is not activating it, and reading the built `activate`
+  script as an artifact is safe - that is how the activation order is asserted.
+  Pointing `homeDirectory` at a temp directory does **not** make activating
+  safe; see the sharp edge below for why.
 - Run the suite with `./tests/run.sh` (`--strict` in CI, where a skipped check is
   a failure). It works from any directory, and there is a test count behind that
   claim: every test file declares `dotfiles_test_expect <n>`, and `test_summary`
@@ -76,6 +138,12 @@ documents that seam.
   `bootstrap.sh`, `rebuild.sh`, `lib/*.sh` and `tests/*.sh`.
 - The scripts are bash; an agent's own shell here is often zsh. Test a library
   with `/bin/bash -c '. lib/x.sh; fn'`, never by sourcing it into your own shell.
+- What gets installed is declared in two lists, not one: `home.packages` for
+  nixpkgs and the `brews`/`casks` lists at the top of `home.nix` for Homebrew.
+  Nothing may appear in both - two copies on `PATH` are resolved by an ordering
+  the user never chose - and `tests/homebrew.test.sh` fails if one does. Node
+  stays on the Nix side deliberately: a Homebrew node puts its global npm prefix
+  outside the home directory.
 - `flake.nix` has exactly two adjustable values, `user` and `homeDirectory`, one
   line each. `lib/flake-settings.sh` is the single definition of how they are
   read and rewritten; both scripts and the tests go through it. The architecture
@@ -88,12 +156,37 @@ documents that seam.
 
 ## Sharp edges found the hard way
 
+- **A built `activate` script holds absolute paths that do not come from
+  `homeDirectory`, so redirecting it does not redirect them.** The complete set,
+  as of the pinned Home Manager: `${NIX_STATE_DIR:-/nix/var/nix}/profiles/per-user/$USER`
+  and the matching `gcroots/per-user/$USER`, both derived from `$USER`;
+  `/bin/launchctl`, invoked in domain `gui/$UID`; `/etc/profiles/per-user/`,
+  read-only; and `/bin/bash`, `/bin/readlink`, `/bin/rsync`, `/bin/dirname`.
+  The per-user Nix state paths are destructive: when the pre-Nix-2.14 layout is
+  present, `migrateProfile` runs
+  `rm "$oldProfilesDir/home-manager" "$oldProfilesDir"/home-manager-*` against
+  the **real** user's profile, and it runs *before* the `USER` and `HOME` sanity
+  checks, so neither check can protect anything. The `launchctl` path is inert
+  here only because this configuration declares no launchd agent; it re-arms
+  silently the day one is added, with nothing failing loudly at that moment.
+  This is why no test may activate: a guard would have to keep that list
+  complete forever, and `./tests/run.sh` is documented in HOW-TO.md under "See
+  what would happen, without changing anything".
+  Method lesson, because it is what produced the false claim this replaces: a
+  probe whose pattern can only match the shape you expect cannot disconfirm
+  anything. "Every path derives from `homeDirectory`" was established with a
+  grep for `/Users` paths, which by construction could never have found the
+  `/nix/var/nix` counterexample that makes it false.
 - `ghostty` in nixpkgs is Linux-only. On macOS the attribute is `ghostty-bin`.
   `tests/packages.test.sh` catches this class of mistake for both architectures.
 - Home Manager's Darwin app handling flipped default at `stateVersion` 25.11:
   `copyApps` (needs the macOS App Management permission, and aborts activation
   without it) instead of `linkApps`. This repo pins `linkApps` on purpose;
   `home.nix` and README.md explain the trade.
+- Home Manager replaces `PATH` with a fixed list of Nix store paths before it
+  runs an activation script, so an activation step cannot find a program the way
+  a shell would. The Homebrew step locates `brew` by absolute prefix, preferring
+  `HOMEBREW_PREFIX` when the environment carries one.
 - `programs.zsh.initContent` defaults to order 1000, but Home Manager emits shell
   aliases at 1150 and syntax highlighting at 1200. The `~/.zshrc.local` include
   is at `lib.mkOrder 1500` so it genuinely runs last.

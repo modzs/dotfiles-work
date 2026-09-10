@@ -3,9 +3,21 @@
 # Run this once. After it finishes, use ./rebuild.sh for every later change.
 #
 # The only thing here that needs sudo is the Nix installer in step 1, and that
-# is the only time this repo ever asks for it. Nothing below step 1 touches
-# anything outside your home directory: no machine name, no /etc, no system
-# package manager, no macOS system settings. See README.md.
+# is the only time this repo asks for a password. No machine name, no /etc, no
+# macOS system settings, and no package manager installed on your behalf.
+#
+# One part of the switch in step 6 does reach outside your home directory: it
+# hands a generated Brewfile to a Homebrew you installed yourself, and Homebrew
+# installs into its own prefix. It uninstalls nothing, and it neither installs
+# nor updates Homebrew itself. The one thing it will replace is an application
+# already sitting where a cask on its list wants to be - that list is in
+# home.nix and it is short. If that app belongs to someone else, replacing it is
+# where Homebrew can ask for a password of its own; README.md is exact about
+# that case and about all of this.
+#
+# Homebrew has to be installed before this runs. The preflight below checks for
+# it before step 1, so a Mac without it is turned away before anything has been
+# installed and before any password is asked for.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -20,6 +32,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/git-identity.sh"
 # shellcheck source=lib/install-report.sh
 . "$DIR/lib/install-report.sh"
+# shellcheck source=lib/homebrew-present.sh
+. "$DIR/lib/homebrew-present.sh"
 
 # Every step below resolves through ~/.dotfiles, so settle that path before
 # anything is installed and before sudo is asked for. Refusing here costs the
@@ -34,6 +48,16 @@ if [ "$PREFLIGHT" = already ]; then
 else
   echo "    ok"
 fi
+
+# The other hard prerequisite, and it is checked here for the same reason: this
+# configuration requires Homebrew, but the step that needs it is the last thing
+# a switch does. Finding out then would cost the user a Nix install and a
+# password before the bad news. This asks a path question only; it never runs
+# Homebrew.
+echo "==> Preflight: Homebrew"
+# Not captured: it reports what it found itself, so no path to `brew` is ever
+# held here. See the comment on the function.
+dotfiles_homebrew_require
 
 echo "==> Step 1: Determinate Nix"
 echo "    This is the one and only step that asks for your password."
@@ -109,7 +133,9 @@ seed_local_file "$HOME/.gitconfig.local" "~/.gitconfig.local" <<'LOCAL'
 LOCAL
 
 echo "==> Step 6: first build and switch"
-# No sudo. Home Manager writes into $HOME and asks for nothing else.
+# No sudo. Home Manager writes into $HOME, and its last activation step asks an
+# already-installed Homebrew for the formulae and casks home.nix lists. Neither
+# needs a privilege this script has not already got.
 #
 # `nix run ~/.dotfiles#home-manager` runs the Home Manager revision this repo's
 # flake.lock pins, so the tool and the configuration it activates can never be
@@ -141,10 +167,10 @@ fi
 git_identity_report "    "
 
 # The closing report, not a closing line. What this run installed is spread
-# across ~/.nix-profile/bin and ~/Applications, none of it is visible from the
-# shell this ran in, and a user who came from a personal dotfiles repo will go
-# looking in /Applications and in `brew list` and find nothing in either. All
-# three are expected states, and the moment to say so is here. The closing
-# headline is the report's too: it is what knows whether anything landed, and
-# it prints "==> Done." only when something did. See lib/install-report.sh.
+# across two package managers - ~/.nix-profile/bin from Nix, the Homebrew
+# prefix and /Applications from the Brewfile step - and none of the Nix half is
+# visible from the shell this ran in. Both are expected states, and the moment
+# to say so is here. The closing headline is the report's too: it is what knows
+# whether anything landed, and it prints "==> Done." only when something did.
+# See lib/install-report.sh.
 install_report "    "

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# lib/homebrew-present.sh - the single definition of "is there a Homebrew here".
+#
+# Sourced by bootstrap.sh, which asks this BEFORE it installs Nix. That order is
+# the whole point: this configuration requires Homebrew, and the Homebrew step
+# is the last thing activation does, so without a check up front a user on a Mac
+# with no Homebrew pays for a Nix install and a password prompt and only then
+# gets told. bootstrap.sh states the same principle about ~/.dotfiles: refusing
+# early costs nothing, refusing at the switch costs a Nix install.
+#
+# Detection is a path existence test and nothing else. This library must never
+# run Homebrew - not to check its version, not to ask where it lives.
+#
+# THE RULE HERE MUST MATCH home.nix's activation step. If the two disagree,
+# bootstrap.sh passes and the rebuild fails later, which is exactly the failure
+# this file exists to prevent. Both say: HOMEBREW_PREFIX is authoritative when
+# the environment sets it - look only there, because a machine told where
+# Homebrew is and not having it there has no usable Homebrew, and quietly using
+# a different one would be worse - and otherwise try the two prefixes macOS
+# Homebrew supports, Apple silicon first. Change one, change the other - and the
+# agreement is held by a test rather than by this paragraph:
+# tests/homebrew.test.sh runs both sides against the same prefixes and fails if
+# their verdicts differ.
+#
+# Must stay bash 3.2 compatible - macOS ships no newer bash. See AGENTS.md.
+
+# Describe, for a human, where this machine would look. For the failure message
+# only - it is prose, not a list anything iterates over. It used to be both, and
+# a caller splitting it on whitespace is what made a `HOMEBREW_PREFIX` with a
+# space in it come out as two paths that do not exist.
+dotfiles_homebrew_searched() {
+  local searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
+  if [ -n "${HOMEBREW_PREFIX:-}" ]; then
+    searched="$HOMEBREW_PREFIX/bin/brew"
+  fi
+  printf '%s\n' "$searched"
+}
+
+# Print the path of the Homebrew this machine would use, or nothing at all.
+# Returns 0 either way: "absent" is an answer, not an error, and the caller
+# decides what it means.
+#
+# The branch structure mirrors home.nix's activation step deliberately, down to
+# the quoting. A prefix from the environment is one path and is checked as one
+# path; only the two literal candidates are a list to iterate. Deriving both
+# from a single space-separated string is what let the two disagree, so neither
+# of them does that any more.
+dotfiles_homebrew_find() {
+  local candidate found=""
+
+  if [ -n "${HOMEBREW_PREFIX:-}" ]; then
+    found="$HOMEBREW_PREFIX/bin/brew"
+    if [ -x "$found" ]; then
+      printf '%s\n' "$found"
+    fi
+    return 0
+  fi
+
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+}
+
+# Report which Homebrew this machine would use, or explain and fail.
+#
+# Deliberately reports rather than returns. A caller that captured the path
+# would be a script holding a ready-to-run `brew` in a variable, and
+# tests/safety.test.sh cannot see through a variable: `"$BREW" install ...`
+# tokenizes as `$BREW`, whose basename is not `brew`, so the check that exists
+# to keep these scripts from invoking Homebrew would pass. Nothing here needs
+# the path, so nothing here holds one.
+dotfiles_homebrew_require() {
+  local found
+  found=$(dotfiles_homebrew_find)
+  if [ -n "$found" ]; then
+    echo "    found $found"
+    return 0
+  fi
+
+  echo "ERROR: no Homebrew at $(dotfiles_homebrew_searched)." >&2
+  cat >&2 <<'MISSING'
+       This configuration drives Homebrew and requires it, but it deliberately
+       does not install it. Homebrew's installer needs your password and writes
+       outside your home directory, so running it is your decision to make, not
+       this repository's - and on a Mac you do not administer it may not be
+       yours to make at all.
+
+       Install it yourself from https://brew.sh and run ./bootstrap.sh again.
+       Nothing has been installed yet, so stopping here costs you nothing.
+MISSING
+  return 1
+}

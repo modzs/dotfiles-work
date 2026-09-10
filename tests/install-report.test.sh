@@ -4,8 +4,8 @@
 # The report is the only thing a first-time user reads, and the failure that
 # produced this file was a report that was true and said too little: a complete
 # install, "==> Done.", and a user who concluded nothing had been installed
-# because /Applications was empty, `brew list` was empty, and the shell he had
-# just run bootstrap.sh from could not find a single tool.
+# because the shell he had just run bootstrap.sh from could not find a single
+# tool, and nothing said where the two halves of the install had gone.
 #
 # Two properties, both checked here:
 #
@@ -93,17 +93,17 @@ test_the_report_says_what_was_installed_and_where() {
   # shellcheck disable=SC2088  # a literal to find in the report's text, not a path to expand
   assert_contains "$output" "~/.nix-profile/bin" \
     "the report should say where the tools went"
-  assert_contains "$output" "Home Manager Apps" \
-    "the report should say where the two terminal apps went"
-  assert_contains "$output" "Spotlight will not index" \
-    "the report should say that Spotlight will not find the apps"
+  assert_contains "$output" "/Applications" \
+    "the report should say where the application casks went"
+  assert_contains "$output" "brew list" \
+    "the report should give the command that shows the Homebrew half"
 
-  # The three places a user coming from a personal dotfiles repo will look and
-  # find nothing, unless this says so first.
+  # The shell the user is standing in is the one place they will look and find
+  # nothing, unless this says so first.
   assert_contains "$output" "Open a new terminal" \
     "the report should say the tools need a new shell"
   assert_contains "$output" "installs no Homebrew" \
-    "the report should say Homebrew is deliberately absent"
+    "the report should say this repo never installs Homebrew itself"
 
   pass "report: says what was installed, where it went, and why this shell cannot see it"
 }

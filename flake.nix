@@ -37,11 +37,7 @@
 
       mkHome = system:
         home-manager.lib.homeManagerConfiguration {
-          pkgs = import nixpkgs {
-            inherit system;
-            # claude-code ships under an unfree licence.
-            config.allowUnfree = true;
-          };
+          pkgs = import nixpkgs { inherit system; };
           extraSpecialArgs = { inherit user homeDirectory; };
           modules = [ ./home.nix ];
         };

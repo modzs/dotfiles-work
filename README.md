@@ -2,34 +2,127 @@
 
 A small, rarely-changed dotfiles configuration for **a Mac you do not administer**.
 
-It sets up a shell, an editor, a terminal and a handful of command-line tools
-inside your home directory - and nothing else. It is deliberately separate from,
-and much smaller than, a personal dotfiles repo, because a work Mac is a machine
-you cannot easily repair and are not free to reconfigure.
+It sets up a shell, an editor, a terminal and a handful of command-line tools:
+most of it inside your home directory, and one part - a list of Homebrew
+formulae and casks - through a Homebrew you install yourself. It is deliberately
+separate from, and much smaller than, a personal dotfiles repo, because a work
+Mac is a machine you cannot easily repair and are not free to reconfigure. The
+next section is exact about where the line falls.
 
 ## What this touches, and what it does not
 
-This is the whole point of the repository, so it comes first.
+This is the whole point of the repository, so it comes first, and it is written
+to be read by someone deciding whether it may run on a machine they are
+responsible for.
 
 There are two separate things here, and the honest answer is different for
 each: **this configuration**, which is everything in this repository, and
 **installing Nix**, which `bootstrap.sh` hands to a third-party installer once.
 
-### This configuration writes inside your home directory. That is all it writes.
+**Most of what this configuration does is confined to your home directory. One
+part is not.**
+
+This configuration drives Homebrew. It generates a list of formulae and casks,
+and on every rebuild it asks a Homebrew *you already installed* to install what
+is on that list. Homebrew installs into its own prefix - `/opt/homebrew` on
+Apple silicon, `/usr/local` on Intel - and casks put real applications in
+`/Applications`. Both are outside your home directory. That is a deliberate
+choice by the owner of this repo, not an accident, and this section says so
+rather than claiming a containment that no longer holds.
+
+### What this configuration writes, and the one place it reaches further
 
 | This configuration does | This configuration does not |
 | --- | --- |
-| Install command-line tools and two terminal apps for your account | Install a system-wide package manager, or remove software someone else installed |
-| Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Write to `/etc`, `/Library`, `/usr`, `/opt`, or `/Applications` |
-| Manage your own shell, editor, git and terminal settings | Change the computer's name, network settings, or macOS system settings |
-| Ask for your password **once**, to install Nix | Ask for your password ever again |
+| Install command-line tools for your account from Nix, inside your home directory | Write anything itself outside your home directory. The one way it reaches further is by asking an existing Homebrew to install the names on the list - Homebrew's own prefix, `/usr/local` on Intel, and `/Applications` for casks. Where a cask goes beyond that is the cask's doing: a `pkg` cask hands its payload to the macOS installer, which can write to `/Library` and prompt for a password. That only happens for a name you put on the list yourself |
+| Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself - though Homebrew may still auto-update itself when asked to install, see below |
+| Add to what Homebrew has installed | Uninstall *anything*, or let the environment ask it to - see below |
+| Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
+| Ask for your password **once**, to install Nix | Ask for your password again itself, or run `sudo` at all - though a cask replacing an app you do not own can make *Homebrew* ask, see below |
 
-Concretely, this configuration has no way to rename the machine, edit
-`/etc/sudoers` or `sshd_config`, install a system package manager, write
-system-domain macOS defaults, or manage other user accounts - because it is a
+Three of those deserve to be spelled out.
+
+**It asks Homebrew to uninstall nothing.** Homebrew's "bundle" mechanism can be
+run in a mode that uninstalls whatever is not on the list. This configuration
+passes no flag that asks for it, and it goes one step further: that mode can
+also be turned on from the environment, by `HOMEBREW_BUNDLE_INSTALL_CLEANUP` or
+`HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP`, so the step unsets both before it runs
+Homebrew. Whatever is exported on the machine, in a shell profile or by a
+managed configuration profile, no rebuild asks Homebrew to remove software. The
+test suite runs the step against a stand-in for `brew` and fails if it ever
+passes a flag that could uninstall, or if either of those two variables survives
+into Homebrew's environment.
+
+That is a claim about what this repository asks for, and it is worth being exact
+about the difference between that and what Homebrew does on its own. Every
+`brew install` on this Mac - yours, typed by hand, or this one - finishes by
+checking whether a routine cleanup is due, and roughly monthly that cleanup runs
+`brew autoremove`. So a rebuild that installs something new can be the command
+that triggers it. That is Homebrew's standing maintenance on this machine rather
+than anything this configuration introduces, which is why the step leaves it
+alone: switching it off here would give this Mac a maintenance policy your other
+Macs do not have, and it would be reversing your own Homebrew setting to do it.
+
+Its reach is narrow, and the narrowness is the point. `autoremove` considers
+formulae only, never casks, and never a formula you installed on request - only
+ones that arrived as dependencies and are no longer needed by anything
+installed. Software you installed deliberately stays. If you would rather
+Homebrew never did this at all, that is a Homebrew setting, `HOMEBREW_NO_AUTOREMOVE`,
+and it is yours to set.
+
+There is one thing it *will* replace, and it is worth being exact about. The
+step passes `--force`, so a cask is allowed to claim whatever is already
+sitting where it installs. For the two application casks on the list in
+`home.nix` - today WezTerm and Ghostty - that means an app of that name already
+in `/Applications` is replaced by Homebrew's copy, however it got there.
+
+Replacing an app is also the one thing that can make a password prompt appear
+mid-rebuild, and it is worth knowing why. This repository never runs `sudo` and
+never asks for a password itself. But Homebrew removes the app it is replacing,
+and if that app belongs to someone else - deployed by your employer's management
+software, owned by `root` - the plain removal fails, and Homebrew falls back to
+taking ownership with `sudo`, which prompts. So: a rebuild does not ask for your
+password, and a cask replacing an app you do not own can cause Homebrew to.
+
+The third cask, `claude-code`, installs no app: it puts a `claude` command on
+Homebrew's `bin` path, and there `--force` mostly does not overwrite. The exact
+rule, because it decides whether your rebuild stops or your file disappears. If
+something already sits at that path and it resolves to a real target, it is
+replaced only when it is a symlink pointing into that cask's own storage;
+anything else - a regular file, or a working link to something unrelated - makes
+the install refuse, which fails the rebuild and keeps failing until you move it
+aside yourself. The exception is a *broken* symlink: Homebrew tests whether the
+target exists, a dangling link answers no, and it is replaced silently. Nothing
+whose name is not on the cask list is touched at all.
+
+**It never installs Homebrew.** Homebrew's own installer needs a password and
+writes outside the home directory, so running it is a decision for whoever owns
+the machine. If Homebrew is absent, this configuration stops with an
+explanation, and where it stops depends on which script you ran. `./bootstrap.sh`
+checks before it does anything at all: it refuses up front, before Nix is
+installed and before the one password prompt, so a Mac that cannot have Homebrew
+is turned away having had nothing done to it. `./rebuild.sh` on a machine that
+had Homebrew and lost it stops later, at the last activation step - everything
+Nix installs is already in place by then, your shell and editor and git config
+included, and only the formulae and casks are missing. Either way nothing
+outside your home directory was touched.
+
+It does not run `brew update` either. But it does not stop Homebrew from
+updating itself: unless you have exported `HOMEBREW_NO_AUTO_UPDATE` yourself,
+`brew bundle install` can trigger Homebrew's own auto-update, which fetches and
+resets Homebrew's checkout and its taps inside the Homebrew prefix. That is
+Homebrew behaving the way it normally does on any `brew install`, and this
+configuration deliberately leaves the choice where it found it.
+
+**Everything else really is confined.** This is a
 [standalone Home Manager](https://nix-community.github.io/home-manager/)
-configuration and those settings do not exist in it. `tests/safety.test.sh`
-asserts that mechanically, so a future change cannot quietly reintroduce them.
+configuration with no `nix-darwin`, which means it has no way to express a
+machine name, an `/etc/sudoers` edit, an `sshd_config`, a system-domain macOS
+default, or another user account - those settings do not exist in it, so they
+cannot be set by accident or by a future change. `tests/safety.test.sh` asserts
+that mechanically against the evaluated configuration and the built artifact,
+and `tests/homebrew.test.sh` asserts the Homebrew claims above by executing
+them.
 
 ### Installing Nix is a system-level install, and it does write outside `$HOME`
 
@@ -47,10 +140,10 @@ show this repo to whoever administers your Mac:
 | `/Library/LaunchDaemons/systems.determinate.*.plist` | the build daemon that runs in the background |
 | a block appended to `/etc/zshrc` and `/etc/bashrc` | what puts `nix`, and the tools this configuration installs, on the `PATH` of new shells |
 
-So "it only touches my home directory" is true of the configuration and not of
-installing Nix. After the install, the store, your profile generations and
-everything else Nix does for you belong to your account, and nothing else on
-the machine is touched again.
+So "it only touches my home directory" is true of the configuration apart from
+the Homebrew step above, and it is not true of installing Nix at all. After the
+install, the store, your profile generations and everything else Nix does for
+you belong to your account, and nothing else on the machine is touched again.
 
 That last row is the one to remember on a managed Mac: the `/etc/zshrc` block
 is what makes any of this reachable from a shell, and it is a system file this
@@ -61,22 +154,47 @@ it for you. If management software has dropped that block, the repair that is
 yours to make is a `PATH` line in `~/.zshrc.local`, below.
 
 > **Check with your employer before installing anything.** The paragraphs above
-> are technical statements about what runs, not permission to install software
-> on a machine your employer owns.
+> are technical statements about what this configuration does. They are not
+> permission to install software - Nix or Homebrew - on a machine your employer
+> owns.
 
 ## What you get
+
+From **Nix**, pinned by `flake.lock`:
 
 - **zsh** with autosuggestions, syntax highlighting and a
   [starship](https://starship.rs) prompt
 - **neovim**, configured, with the plugin set in `home/.config/nvim`
 - **git**, wired to include untracked local files for your identity
-- **wezterm** and **ghostty**, two terminal emulators
-- `ripgrep`, `fd`, `fzf`, `jq`, `lazygit`, `gh`, `claude-code`, Node, and the
-  Hack Nerd Font
+- `ripgrep`, `fd`, `fzf`, `jq`, `lazygit`, Node, and the Hack Nerd Font
 
-Every version is pinned by `flake.lock`. Nothing updates on its own: this is
-meant to be installed once and left alone, and an update is something you do
-deliberately.
+From **Homebrew**, whatever it resolves at the time you rebuild:
+
+- `herdr` and `gh`
+- **WezTerm**, **Ghostty** and **Claude Code**, as casks
+
+The two halves are declared separately in `home.nix` and nothing appears in
+both. The trade between them is real: the Nix half is reproducible - the same
+`flake.lock` gives the same versions on any machine, forever - and the Homebrew
+half is not, because a Brewfile names a formula and Homebrew decides the
+version. What the Homebrew half buys is that its applications land in
+`/Applications` like any other Mac application, where Spotlight and Launch
+Services find them.
+
+None of your packages update on their own. This is meant to be installed once
+and left alone, and an update is something you do deliberately. That holds for
+both halves: a rebuild installs whatever on the Homebrew list is missing and
+skips what is already installed, leaving it at the version it is, so upgrading a
+formula or a cask on the list stays something you ask for with `brew`. The
+exception is a dependency - installing a new name may bring an outdated library
+it needs up with it, which is Homebrew resolving its own requirements rather
+than anything this configuration asks for.
+
+Homebrew itself is the exception, and it is not this repo's doing. A rebuild
+asks Homebrew to install, and unless you have exported `HOMEBREW_NO_AUTO_UPDATE`
+Homebrew may update its own checkout and taps first, exactly as it would if you
+had typed `brew install`. This configuration neither turns that on nor off - it
+leaves the variable exactly as it finds it.
 
 ## Prerequisites
 
@@ -84,6 +202,12 @@ deliberately.
   architecture is detected, not configured.
 - The ability to install Nix, which needs your password once. If your employer's
   policy does not allow that, this repo cannot be used.
+- **Homebrew**, installed by you before you run `./bootstrap.sh`. This repo
+  requires it and never installs it; see [HOW-TO.md](HOW-TO.md). There is no way
+  to turn the Homebrew half off: emptying the `brews` and `casks` lists in
+  `home.nix` leaves the step with nothing to install, but the step still runs
+  and still needs a `brew` to talk to. If you cannot have Homebrew on this Mac,
+  this repo is not usable as it stands.
 
 ## Setup
 
@@ -150,39 +274,35 @@ which file git is actually using.
 
 ## Things worth knowing
 
-### The GUI apps are symlinked, and Spotlight will not find them
+### Where the applications go
 
-WezTerm and Ghostty are installed into `~/Applications/Home Manager Apps` as
-symlinks pointing into the Nix store. Verified: macOS resolves a real
-executable in both bundles through those symlinks, so opening one in Finder
-launches it, and `tests/packages.test.sh` re-checks that on every run.
+WezTerm and Ghostty are application casks, so they install into `/Applications`
+exactly like any application you download yourself. Spotlight indexes them,
+`open -a WezTerm` works, and they appear in the Dock and in Launchpad without
+anything special being done to them.
 
-What is **not** promised is Spotlight. Home Manager's own documentation
-describes the copying mode - not this one - as the one that "works with
-Spotlight", so assume ⌘-Space will not find these two and that `open -a WezTerm`,
-which needs the same Launch Services registration, may not either. The
-dependable ways to start them are:
+Claude Code is a cask too, but not an application one: it installs a single
+`claude` executable onto Homebrew's `bin` path. Look for it in a terminal, not
+in Launchpad - there is no bundle for Spotlight or the Dock to find.
 
-```sh
-open ~/Applications/Home\ Manager\ Apps/WezTerm.app   # by path, always works
-wezterm                                              # both are also on PATH
-ghostty
-```
+That was not true of the arrangement this replaced, where they came from Nix and
+were symlinked into `~/Applications/Home Manager Apps`. Symlinked bundles launch
+from Finder but are not reliably indexed, so ⌘-Space did not find them.
 
-Opening one from Finder once, or dragging it to the Dock, is usually enough to
-make it behave like any other app afterwards.
-
-Home Manager can instead *copy* the bundles, which Spotlight does index - but
-copying requires the macOS **App Management** permission for your terminal, and
-when it cannot get that permission it aborts the entire activation. On a machine
-whose privacy settings someone else administers, that permission may not be
-grantable at all, and losing your whole shell setup over two terminal emulators
-is a bad trade. If your machine does allow it, flip the two lines in `home.nix`:
+If you add a GUI application from nixpkgs, it goes back to being symlinked:
 
 ```nix
-targets.darwin.copyApps.enable = true;
-targets.darwin.linkApps.enable = false;
+targets.darwin.copyApps.enable = false;
+targets.darwin.linkApps.enable = true;
 ```
+
+Those two lines are set that way on purpose and `tests/packages.test.sh` holds
+them there. Home Manager's default from `stateVersion` 25.11 is the other one,
+`copyApps`, which copies the bundles so Spotlight indexes them - but copying
+requires the macOS **App Management** permission for your terminal, and when it
+cannot get that permission it aborts the entire activation. On a machine whose
+privacy settings someone else administers that permission may not be grantable
+at all, and losing your whole shell setup over one application is a bad trade.
 
 ### Globally installed npm packages
 
@@ -191,11 +311,22 @@ itself comes from nixpkgs and lives in the read-only Nix store, so npm needs a
 writable prefix somewhere - and the only place this configuration will put one
 is inside your home directory.
 
-### `herdr` is not installed
+### Homebrew has to be there before the first rebuild
 
-`herdr` is not in nixpkgs, so this configuration cannot install it. Install it
-by hand, however your setup allows, and it will work alongside everything here.
-Nothing in this repo depends on it.
+The Homebrew step runs on every switch, and it does not install Homebrew - see
+"What this touches" above for why. `./bootstrap.sh` will not start without it:
+it checks first and refuses before installing Nix, so a first run on a Mac with
+no Homebrew costs you nothing. If Homebrew goes missing later, `./rebuild.sh`
+stops at that last step and tells you so; everything Nix installs has already
+been written by that point, so your shell and editor are configured either way.
+
+Homebrew also needs to be on your `PATH` for the tools it installs to be
+usable. Its own installer arranges that, normally by adding
+`eval "$(<prefix>/bin/brew shellenv)"` to `~/.zprofile`, where `<prefix>` is
+`/opt/homebrew` on Apple silicon and `/usr/local` on Intel. This repo does not
+touch your `PATH` for Homebrew's sake, and it finds `brew` by its prefix rather
+than by `PATH`, so a rebuild can succeed on a machine where your shell still
+cannot see `gh`. If that happens, the missing piece is that line.
 
 ### Editing neovim and wezterm config
 
@@ -220,7 +351,7 @@ See [HOW-TO.md](HOW-TO.md) for the commands to undo changes or remove this confi
 | Path | What it is |
 | --- | --- |
 | `flake.nix` | The two adjustable settings, and the configuration for both architectures |
-| `home.nix` | Everything that gets installed and configured |
+| `home.nix` | Everything that gets installed and configured, from both Nix and Homebrew |
 | `home/.config/` | Editor and terminal config, symlinked live into `~/.config` |
 | `bootstrap.sh` | One-time setup: Nix, settings, local files, first switch |
 | `rebuild.sh` | Every later change |
@@ -232,10 +363,20 @@ See [HOW-TO.md](HOW-TO.md) for the commands to undo changes or remove this confi
 
 This is not a fork or a subset of one. It is a separate, smaller thing built on
 a different foundation: a personal Mac config typically uses `nix-darwin`, which
-configures the *system* - the machine name, macOS defaults, Homebrew, sudo. All
-of that is exactly what must not happen here, so none of it is present. The
-editor and shell configuration is shared in spirit; the machinery underneath is
-not.
+configures the *system* - the machine name, macOS defaults, sudo, and Homebrew
+along with them. Almost all of that is exactly what must not happen here, so it
+is not present: there is no `nix-darwin` input, and nothing here runs `sudo` or
+asks you for a password of its own. The one prompt a rebuild can produce is
+Homebrew's, when a cask has to replace an application you do not own - see
+"What this touches" above.
+
+Homebrew is the one thing the two have in common, and even there the mechanism
+differs. `nix-darwin` has Homebrew options; standalone Home Manager has none, so
+this repo generates a Brewfile and runs `brew bundle install` against it from an
+activation step. The personal configuration also sets a cleanup mode that
+uninstalls anything not on its list. This one deliberately does not, because
+here Homebrew is a general-purpose package manager with software on it that
+nothing in this repo put there.
 
 ## License
 
