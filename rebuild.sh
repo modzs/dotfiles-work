@@ -62,8 +62,12 @@ dotfiles_link_apply "$DIR"
 
 # Not `exec`: the identity report below has to run after the switch, which is
 # what installs home.nix's includes of ~/.gitconfig.local and ~/.gitconfig.work.
-# The switch's own exit status is kept and re-raised, so a report can neither
-# fail a good rebuild nor hide a failed one.
+# The switch's own exit status is kept and re-raised, so a report can never
+# hide a failed one. Nor may a report fail a good rebuild - with one refinement
+# the closing verdict adds: a switch that exits 0 onto a profile with nothing
+# in it is not a good rebuild, and that is the one case where the verdict's own
+# status wins over a 0. It is the state bootstrap.sh already fails on, and this
+# is the script its report sends the user to.
 # `nix run ~/.dotfiles#home-manager` rather than a `home-manager` on PATH: it
 # is the revision flake.lock pins, it is the same command bootstrap.sh runs on
 # a machine that has no profile yet, and it cannot be shadowed by some other
@@ -82,7 +86,7 @@ if [ "$STATUS" = 0 ]; then
   # And the two questions a rebuild can answer wrongly in silence. The closing
   # report tells a user to come here, so this is the script that has to say
   # whether the tools are there and whether a login shell can reach them.
-  install_report_rebuild_verdict
+  install_report_rebuild_verdict || STATUS=$?
 else
   echo "ERROR: the rebuild did not complete." >&2
   echo "       Some changes may already have been applied to your home" >&2

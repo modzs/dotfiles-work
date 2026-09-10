@@ -62,10 +62,15 @@ install_report_tool_count() {
 #   into this process. Inheriting that would make the probe agree that all is
 #   well about the exact thing it exists to doubt.
 # - `zsh -f`, then sourcing the startup files explicitly. This runs the system
-#   files and the two user files that legitimately set PATH; it deliberately
-#   does not source ~/.zshrc, which is interactive-only, is this configuration's
-#   own file, and sets no PATH. Anything missed that way is a false warning,
-#   never a false all-clear.
+#   files and the user files that legitimately set PATH; it deliberately does
+#   not source ~/.zshrc, which is interactive-only, is this configuration's own
+#   file, and sets no PATH. Anything missed that way is a false warning, never
+#   a false all-clear.
+#   ~/.zshrc.local is the exception, and it is sourced last. It is the one file
+#   README gives the user for exactly this repair, it is reached through
+#   ~/.zshrc at lib.mkOrder 1500 so it really does run after /etc/zshrc, and a
+#   check that could not see it would go on telling a user who had already
+#   fixed his PATH that his tools are unreachable and his employer is at fault.
 # - A marker on the answer. These startup files belong to whoever administers
 #   the Mac, and one that prints a banner would otherwise have its own output
 #   read as the front of PATH - which is where the profile sits, because the
@@ -78,7 +83,7 @@ install_report_login_path() {
   # The escaped expansions are zsh's to make, not this shell's; the marker is
   # this shell's, so it is written once and spliced in here.
   probe="
-for f in /etc/zshenv \"\$HOME/.zshenv\" /etc/zprofile \"\$HOME/.zprofile\" /etc/zshrc; do
+for f in /etc/zshenv \"\$HOME/.zshenv\" /etc/zprofile \"\$HOME/.zprofile\" /etc/zshrc \"\$HOME/.zshrc.local\"; do
   [ -r \"\$f\" ] && . \"\$f\"
 done
 print -r -- \"$marker\$PATH\"
@@ -254,7 +259,11 @@ install_report_rebuild_verdict() {
     printf '\n'
     printf 'What is really there:\n'
     printf '  ls -la ~/.nix-profile/bin\n'
-    return 0
+    # The same claim install_report makes, for the same reason and within the
+    # same bounds: only a profile proven empty is a failed run. A probe that
+    # could not answer, and an install that is merely out of reach, both leave
+    # the status alone.
+    return 1
   fi
 
   # shellcheck disable=SC2088  # the text the user reads, not a path to expand

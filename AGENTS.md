@@ -51,7 +51,9 @@ documents that seam.
   `tests/rebuild.test.sh` runs the script end to end against a scratch `HOME`
   with the switch stubbed, and holds both properties.
 - **A successful run has to be legible.** `lib/install-report.sh` is what
-  `bootstrap.sh` says at the end, and `tests/install-report.test.sh` drives it
+  `bootstrap.sh` says at the end and, through
+  `install_report_rebuild_verdict`, what `rebuild.sh` says after a successful
+  switch - two callers share it. `tests/install-report.test.sh` drives it
   directly. Nothing this repo writes puts the profile on `PATH` - a line the
   Nix installer adds to `/etc/zshrc` does - so the report probes what a fresh
   login shell would really see and warns when it would see nothing. It names

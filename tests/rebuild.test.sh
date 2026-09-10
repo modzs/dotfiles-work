@@ -29,6 +29,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=lib/flake-settings.sh
 . "$ROOT/lib/flake-settings.sh"
+# shellcheck source=lib/install-report.sh
+. "$ROOT/lib/install-report.sh"
 
 dotfiles_test_parse_args "$@"
 
@@ -214,6 +216,11 @@ test_a_successful_switch_runs_the_identity_report() {
   rebuild_fixture "$(whoami)"
   rebuild_fixture_matches_this_machine
   rebuild_stub_nix 0
+  # An ordinary machine, which is what "a successful switch" means: the profile
+  # a previous run left behind is still there. An empty one is its own check
+  # below, and it is deliberately not an exit 0.
+  mkdir -p "$FIXTURE_HOME/.nix-profile/bin"
+  touch "$FIXTURE_HOME/.nix-profile/bin/rg"
 
   rebuild_run "$FIXTURE_TMP/bin:$SYSTEM_PATH"
   output=$REBUILD_OUTPUT
@@ -246,7 +253,7 @@ test_a_successful_switch_runs_the_identity_report() {
 # teaches people to stop reading it.
 
 test_a_successful_rebuild_says_what_is_there_and_whether_a_shell_finds_it() {
-  local output
+  local output probe_status
   rebuild_fixture "$(whoami)"
   rebuild_fixture_matches_this_machine
   rebuild_stub_nix 0
@@ -266,12 +273,19 @@ test_a_successful_rebuild_says_what_is_there_and_whether_a_shell_finds_it() {
   assert_contains "$output" "holds 2 command-line tools" \
     "a rebuild should say what the profile carries now"
 
-  if command -v zsh >/dev/null 2>&1; then
+  # Gated on what the probe really answers for this fixture home, not on zsh
+  # being installed: a startup file this repo does not own can exit early or
+  # swallow the marked line, and then the probe cannot answer on a machine that
+  # has zsh - which is a managed Mac, the machine this suite runs on.
+  probe_status=0
+  HOME="$FIXTURE_HOME" install_report_login_path >/dev/null 2>&1 || probe_status=$?
+
+  if [ "$probe_status" = 0 ]; then
     assert_contains "$output" "Checked: a new login shell does find them" \
       "a reachable profile should be confirmed, which is what the user came for"
   else
-    # No zsh to probe with is the third state, and it has to read as
-    # unverified rather than as silence or as fine.
+    # The third state, and it has to read as unverified rather than as silence
+    # or as fine.
     assert_contains "$output" "Not checked" \
       "a check that could not run must say so rather than say nothing"
   fi
@@ -291,7 +305,13 @@ test_a_switch_that_leaves_an_empty_profile_is_not_reported_as_fine() {
   rebuild_run "$FIXTURE_TMP/bin:$SYSTEM_PATH"
   output=$REBUILD_OUTPUT
 
-  assert_eq "$REBUILD_STATUS" 0 "the switch's own status is what rebuild.sh re-raises"
+  # The one refinement to "the switch's own status is what rebuild.sh
+  # re-raises": a switch that exits 0 onto a profile with nothing in it is not
+  # a good rebuild, and this is the recovery path the closing report sends a
+  # user to, so telling a caller it worked is the failure this change exists to
+  # remove. bootstrap.sh already fails on the identical state.
+  [ "$REBUILD_STATUS" != 0 ] \
+    || fail "a rebuild that left an empty profile reported success"
   assert_contains "$output" "WARNING: ~/.nix-profile/bin is empty or missing" \
     "an empty profile after a successful switch must not pass in silence"
   assert_not_contains "$output" "Checked: a new login shell does find them" \

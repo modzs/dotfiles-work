@@ -37,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 9
+dotfiles_test_expect 11
 
 # A home directory that looks like one bootstrap.sh has just finished with: a
 # profile carrying a few tools. Echoes the path.
@@ -298,6 +298,55 @@ test_a_startup_file_that_prints_is_not_read_as_path() {
   pass "report: what a startup file prints is not mistaken for the login PATH"
 }
 
+test_a_path_fix_in_zshrc_local_is_seen_as_reachable() {
+  local home output status=0
+
+  home=$(install_report_fixture_home)
+
+  # The repair README gives a user who cannot touch /etc/zshrc. ~/.zshrc.local
+  # is his file, ~/.zshrc includes it at lib.mkOrder 1500, and once it is there
+  # every new terminal really does find the tools. A check that could not see
+  # it would go on telling him they are unreachable and go on blaming whoever
+  # administers his Mac - permanently, and wrongly.
+  # shellcheck disable=SC2016  # zsh expands this when it sources the file, not this shell
+  printf '%s\n' 'export PATH="$HOME/.nix-profile/bin:$PATH"' >"$home/.zshrc.local"
+
+  HOME="$home" install_report_login_path >/dev/null 2>&1 || status=$?
+  if [ "$status" != 0 ]; then
+    skip "login-shell probe (no usable zsh to probe with)"
+    return 0
+  fi
+
+  output=$(HOME="$home" install_report "    ")
+
+  assert_contains "$output" "Checked: a new login shell does find them" \
+    "a PATH fixed in ~/.zshrc.local does reach a new terminal, so say so"
+  assert_not_contains "$output" "WARNING" \
+    "a user who has already fixed his PATH must not be warned about it"
+
+  pass "report: a PATH fix in ~/.zshrc.local counts as reachable"
+}
+
+test_a_zshrc_local_that_stops_the_probe_reads_as_unverified() {
+  local home output
+
+  home=$(install_report_fixture_home)
+
+  # The cost of sourcing it: ~/.zshrc.local is a file the user wrote, so it can
+  # exit early, fail, or be broken outright. Whatever it does, the one answer
+  # this check must never give is a confident one.
+  printf '%s\n' 'exit 1' >"$home/.zshrc.local"
+
+  output=$(HOME="$home" install_report "    ")
+
+  assert_contains "$output" "Not checked" \
+    "a probe the user's own file stopped must read as unverified"
+  assert_not_contains "$output" "Checked: a new login shell does find them" \
+    "a probe that never answered must never claim the tools are reachable"
+
+  pass "report: a ~/.zshrc.local that stops the probe reads as unverified, not fine"
+}
+
 # --- the one property no stub can prove ---------------------------------------
 
 test_the_probe_does_not_inherit_this_process_path() {
@@ -346,6 +395,8 @@ test_an_unreachable_profile_is_a_loud_warning_naming_etc_zshrc
 test_a_reachable_profile_produces_no_warning
 test_an_unanswerable_check_is_never_reported_as_fine
 test_a_startup_file_that_prints_is_not_read_as_path
+test_a_path_fix_in_zshrc_local_is_seen_as_reachable
+test_a_zshrc_local_that_stops_the_probe_reads_as_unverified
 test_the_probe_does_not_inherit_this_process_path
 
 test_summary
