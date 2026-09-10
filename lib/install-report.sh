@@ -75,13 +75,14 @@ install_report_login_path() {
   local probe result marker='__dotfiles_login_path__'
   command -v zsh >/dev/null 2>&1 || return 1
 
-  # shellcheck disable=SC2016  # every expansion in here is zsh's to make, not this shell's
-  probe='
-for f in /etc/zshenv "$HOME/.zshenv" /etc/zprofile "$HOME/.zprofile" /etc/zshrc; do
-  [ -r "$f" ] && . "$f"
+  # The escaped expansions are zsh's to make, not this shell's; the marker is
+  # this shell's, so it is written once and spliced in here.
+  probe="
+for f in /etc/zshenv \"\$HOME/.zshenv\" /etc/zprofile \"\$HOME/.zprofile\" /etc/zshrc; do
+  [ -r \"\$f\" ] && . \"\$f\"
 done
-print -r -- "__dotfiles_login_path__$PATH"
-'
+print -r -- \"$marker\$PATH\"
+"
   result=$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin TERM=dumb \
     zsh -f -c "$probe" </dev/null 2>/dev/null) || return 1
   result=$(printf '%s\n' "$result" | grep "^$marker" | tail -n1) || return 1
@@ -134,6 +135,17 @@ install_report_reachability_note() {
   printf '%s  ~/.nix-profile/bin/rg --version\n' "$indent"
 }
 
+# The one state a successful switch can leave behind that produces no error
+# anywhere: a profile with nothing in it. Both entry points can find it, so
+# both say it the same way.
+install_report_empty_profile_warning() {
+  local indent=$1
+  printf '%sWARNING: ~/.nix-profile/bin is empty or missing, so this account\n' "$indent"
+  printf '%shas no command-line tools from this configuration - even though\n' "$indent"
+  printf '%sthe switch above reported success. Something is wrong; this run\n' "$indent"
+  printf '%sis not finished.\n' "$indent"
+}
+
 # --- the report ---------------------------------------------------------------
 
 # $1 is an optional indent so bootstrap.sh's step margin is preserved.
@@ -155,10 +167,7 @@ install_report() {
   # that are not there.
   if [ "$count" = 0 ]; then
     printf '==> Not done: nothing is installed.\n'
-    printf '%sWARNING: ~/.nix-profile/bin is empty or missing, so this account\n' "$indent"
-    printf '%shas no command-line tools from this configuration - even though\n' "$indent"
-    printf '%sthe switch above reported success. Something is wrong; this run\n' "$indent"
-    printf '%sis not finished.\n' "$indent"
+    install_report_empty_profile_warning "$indent"
     printf '\n'
     printf '%sThis shell cannot see nix - Nix only adds itself to shells that\n' "$indent"
     printf '%sstart after it was installed - so the retry has to happen in a\n' "$indent"
@@ -168,7 +177,12 @@ install_report() {
     printf '\n'
     printf '%sWhat is really in the profile, from that new terminal:\n' "$indent"
     printf '%s  ls -la ~/.nix-profile/bin\n' "$indent"
-    return 0
+    # An exit status is a claim too, and bootstrap.sh's is this function's:
+    # `install_report` is its last statement. Only this branch fails the run,
+    # because only here has the report established that nothing is installed.
+    # A reachability check that could not answer, and an install that is
+    # merely unreachable, both leave the status alone - the tools are there.
+    return 1
   fi
 
   printf '==> Done.\n'
@@ -219,4 +233,31 @@ install_report_zshrc_backup() {
   printf '%sYour previous ~/.zshrc was moved to ~/.zshrc.backup. Anything you\n' "$indent"
   printf '%swant to keep from it belongs in ~/.zshrc.local, which is sourced\n' "$indent"
   printf '%slast and is never committed.\n' "$indent"
+}
+
+# --- what rebuild.sh says when its switch succeeded ---------------------------
+#
+# Not the full report: a rebuild runs often, and a wall of text every time is
+# how people learn to stop reading it. But the two questions that report exists
+# to answer are exactly the two a successful rebuild can still leave wrong with
+# no error anywhere - is anything actually installed, and can a new login shell
+# reach it - and the report itself sends a user here to find out. So the
+# verdict is one line when there is nothing to say, and the same warning
+# bootstrap.sh gives when there is.
+install_report_rebuild_verdict() {
+  local count
+  count=$(install_report_tool_count)
+
+  printf '\n'
+  if [ "$count" = 0 ]; then
+    install_report_empty_profile_warning ''
+    printf '\n'
+    printf 'What is really there:\n'
+    printf '  ls -la ~/.nix-profile/bin\n'
+    return 0
+  fi
+
+  # shellcheck disable=SC2088  # the text the user reads, not a path to expand
+  printf '~/.nix-profile/bin holds %s command-line tools.\n' "$count"
+  install_report_reachability_note ''
 }

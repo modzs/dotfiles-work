@@ -14,6 +14,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/flake-settings.sh"
 # shellcheck source=lib/git-identity.sh
 . "$DIR/lib/git-identity.sh"
+# shellcheck source=lib/install-report.sh
+. "$DIR/lib/install-report.sh"
 
 # --- preflight: everything that can refuse, before anything that writes -------
 #
@@ -77,6 +79,10 @@ STATUS=0
 # run that changed nothing comes to read like a run that worked.
 if [ "$STATUS" = 0 ]; then
   git_identity_report
+  # And the two questions a rebuild can answer wrongly in silence. The closing
+  # report tells a user to come here, so this is the script that has to say
+  # whether the tools are there and whether a login shell can reach them.
+  install_report_rebuild_verdict
 else
   echo "ERROR: the rebuild did not complete." >&2
   echo "       Some changes may already have been applied to your home" >&2

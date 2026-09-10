@@ -37,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 8
+dotfiles_test_expect 9
 
 # A home directory that looks like one bootstrap.sh has just finished with: a
 # profile carrying a few tools. Echoes the path.
@@ -118,7 +118,7 @@ test_an_empty_profile_is_reported_as_a_broken_install() {
   # therefore confirm a new terminal finds tools that are not there.
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    ") || true
   install_report_restore_probe
 
   assert_contains "$output" "WARNING" \
@@ -137,6 +137,46 @@ test_an_empty_profile_is_reported_as_a_broken_install() {
     "the report should say what actually works from here"
 
   pass "report: an empty or missing profile reads as a broken install"
+}
+
+test_only_a_profile_proven_empty_fails_the_run() {
+  local home status
+
+  home=$(install_report_fixture_home)
+
+  # install_report is bootstrap.sh's last statement, so what it returns is what
+  # the script returns - and `./bootstrap.sh && <next step>`, or an MDM wrapper
+  # on a managed Mac, reads exactly that. The boundary matters as much as the
+  # claim: only a profile the report has PROVEN empty is a failed run.
+  install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
+  status=0
+  HOME="$home" install_report >/dev/null || status=$?
+  assert_eq "$status" 0 "a complete run must exit 0"
+
+  # Installed but out of reach: the tools are all there and only PATH is
+  # wrong. That is the warning this change added, not a failed bootstrap.
+  install_report_stub_probe "/usr/bin:/bin"
+  status=0
+  HOME="$home" install_report >/dev/null || status=$?
+  assert_eq "$status" 0 "an unreachable but populated profile must not fail the run"
+
+  # And the third state has to survive in the status too. A check that could
+  # not answer is unverified - never failure, never fine.
+  install_report_stub_probe unavailable
+  status=0
+  HOME="$home" install_report >/dev/null || status=$?
+  assert_eq "$status" 0 "a check that could not answer must not fail the run"
+
+  rm -rf "$home/.nix-profile"
+  install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
+  status=0
+  HOME="$home" install_report >/dev/null || status=$?
+  [ "$status" != 0 ] \
+    || fail "a run that installed nothing exited 0, so it reported success"
+
+  install_report_restore_probe
+
+  pass "report: only a profile proven empty makes the run fail"
 }
 
 test_the_report_mentions_the_zshrc_backup_only_when_there_is_one() {
@@ -237,6 +277,7 @@ test_a_startup_file_that_prints_is_not_read_as_path() {
   # way /etc/zshrc does. The damage is specific: the profile sits at the FRONT
   # of PATH, so a banner lands exactly on the field the reachability check
   # reads, and the user is warned about an install that is perfectly fine.
+  # shellcheck disable=SC2016  # zsh expands these when it sources the file, not this shell
   printf '%s\n' \
     'print -r -- "Notice: this Mac is managed by somebody else."' \
     'export PATH="$HOME/.nix-profile/bin:$PATH"' >"$home/.zprofile"
@@ -299,6 +340,7 @@ test_the_probe_does_not_inherit_this_process_path() {
 
 test_the_report_says_what_was_installed_and_where
 test_an_empty_profile_is_reported_as_a_broken_install
+test_only_a_profile_proven_empty_fails_the_run
 test_the_report_mentions_the_zshrc_backup_only_when_there_is_one
 test_an_unreachable_profile_is_a_loud_warning_naming_etc_zshrc
 test_a_reachable_profile_produces_no_warning

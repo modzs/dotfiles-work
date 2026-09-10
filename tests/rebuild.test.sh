@@ -35,7 +35,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 4
+dotfiles_test_expect 6
 
 # A PATH with the ordinary system tools and deliberately no nix. The system
 # directories are the point: a Nix under /nix/var/nix, or one a CI runner put
@@ -199,6 +199,10 @@ test_a_failed_switch_says_so_last_and_suppresses_the_identity_report() {
   # nothing comes to read like a run that worked.
   assert_not_contains "$output" "Heads up" \
     "the identity report should not print after a failed switch"
+  # The closing verdict is the same kind of advice, and it would be answering
+  # for a switch that never finished.
+  assert_not_contains "$output" "command-line tools" \
+    "the closing verdict should not print after a failed switch"
   assert_contains "$last" "covers the ones that come up" \
     "the failure, not advice, should be the last thing on the screen"
 
@@ -233,9 +237,74 @@ test_a_successful_switch_runs_the_identity_report() {
   pass "rebuild: a successful switch exits 0 and still reports the git identity"
 }
 
+# --- what a run that worked leaves the user knowing ---------------------------
+#
+# The closing report tells a user to come here - "Open a new terminal, then run
+# ./rebuild.sh from there" is what it prints when nothing was installed - so
+# this is the script that has to answer the two questions he arrived with. It
+# is not the full report: a rebuild runs often, and a wall of text every time
+# teaches people to stop reading it.
+
+test_a_successful_rebuild_says_what_is_there_and_whether_a_shell_finds_it() {
+  local output
+  rebuild_fixture "$(whoami)"
+  rebuild_fixture_matches_this_machine
+  rebuild_stub_nix 0
+
+  # A profile the switch could have left, and a login shell that will find it.
+  # ~/.zprofile is one of the files the probe sources, so this holds whatever
+  # /etc/zshrc on the machine running the suite happens to say.
+  mkdir -p "$FIXTURE_HOME/.nix-profile/bin"
+  touch "$FIXTURE_HOME/.nix-profile/bin/rg" "$FIXTURE_HOME/.nix-profile/bin/fd"
+  # shellcheck disable=SC2016  # zsh expands these when it sources the file, not this shell
+  printf '%s\n' 'export PATH="$HOME/.nix-profile/bin:$PATH"' >"$FIXTURE_HOME/.zprofile"
+
+  rebuild_run "$FIXTURE_TMP/bin:$SYSTEM_PATH"
+  output=$REBUILD_OUTPUT
+
+  assert_eq "$REBUILD_STATUS" 0 "a successful switch should exit 0"
+  assert_contains "$output" "holds 2 command-line tools" \
+    "a rebuild should say what the profile carries now"
+
+  if command -v zsh >/dev/null 2>&1; then
+    assert_contains "$output" "Checked: a new login shell does find them" \
+      "a reachable profile should be confirmed, which is what the user came for"
+  else
+    # No zsh to probe with is the third state, and it has to read as
+    # unverified rather than as silence or as fine.
+    assert_contains "$output" "Not checked" \
+      "a check that could not run must say so rather than say nothing"
+  fi
+
+  pass "rebuild: a successful run says what is installed and whether a shell finds it"
+}
+
+test_a_switch_that_leaves_an_empty_profile_is_not_reported_as_fine() {
+  local output
+  rebuild_fixture "$(whoami)"
+  rebuild_fixture_matches_this_machine
+  rebuild_stub_nix 0
+
+  # Exactly the state a user is sent here to recover from: the switch reports
+  # success and the profile is still empty. Nothing else in the run produces an
+  # error, so saying nothing here reads as "it worked".
+  rebuild_run "$FIXTURE_TMP/bin:$SYSTEM_PATH"
+  output=$REBUILD_OUTPUT
+
+  assert_eq "$REBUILD_STATUS" 0 "the switch's own status is what rebuild.sh re-raises"
+  assert_contains "$output" "WARNING: ~/.nix-profile/bin is empty or missing" \
+    "an empty profile after a successful switch must not pass in silence"
+  assert_not_contains "$output" "Checked: a new login shell does find them" \
+    "an empty profile must never be confirmed as reachable"
+
+  pass "rebuild: a switch that leaves an empty profile is not reported as fine"
+}
+
 test_refuses_when_nix_is_not_on_this_shells_path
 test_refuses_before_repointing_dotfiles_on_a_machine_mismatch
 test_a_failed_switch_says_so_last_and_suppresses_the_identity_report
 test_a_successful_switch_runs_the_identity_report
+test_a_successful_rebuild_says_what_is_there_and_whether_a_shell_finds_it
+test_a_switch_that_leaves_an_empty_profile_is_not_reported_as_fine
 
 test_summary
