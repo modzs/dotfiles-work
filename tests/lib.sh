@@ -199,3 +199,25 @@ nix_eval() {
   shift
   nix eval --raw "$ROOT#$expr" "$@"
 }
+
+# Build the activation package for a system and print its store path. Several
+# tests ask questions about the built artifact rather than the source, and this
+# is the same derivation CI builds, so after the first call it is a store
+# lookup rather than a build.
+dotfiles_generation() {
+  nix build --no-link --print-out-paths "$ROOT#packages.$1.default" 2>/dev/null
+}
+
+# The store path of the Homebrew step the activation script runs.
+#
+# Found by name inside the built activate script, because that is the only
+# thing that proves the script the tests exercise is the script activation
+# actually runs. Evaluating the derivation separately would prove nothing about
+# what is wired in.
+dotfiles_brew_bundle_script() {
+  local generation=$1 found
+  found=$(grep -o '/nix/store/[a-z0-9]*-dotfiles-work-brew-bundle' "$generation/activate" \
+    | head -n1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}

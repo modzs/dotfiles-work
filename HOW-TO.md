@@ -4,8 +4,11 @@ Task-shaped answers for the things you will actually want to do. For what this
 repository is and what it deliberately does not touch, read
 [README.md](README.md) first.
 
-Everything here runs as you, never as root. If a step in this file ever asks for
-a password, something is wrong - stop and check what you are running.
+Everything this repository runs runs as you, never as root. If `./bootstrap.sh`
+or `./rebuild.sh` ever asks for a password, something is wrong - stop and check
+what you are running. Two things this file tells you to install *before* it,
+Homebrew and Nix, do ask for one; that is their installers, not this repo, and
+it is the reason both are your decision rather than a step it takes for you.
 
 ---
 
@@ -18,26 +21,39 @@ because the shape is different and the difference looks like failure.
 
 **You get** everything in README's [What you get](README.md#what-you-get) - a
 configured shell and editor, git, two terminal emulators and a handful of
-command-line tools. All of it comes from nixpkgs, pinned by `flake.lock`.
+command-line tools. Most of it comes from nixpkgs, pinned by `flake.lock`; a
+short list of formulae and casks comes from Homebrew instead.
 
-**You do not get Homebrew.** This repository never installs a system package
+**You do not get a Homebrew.** This repository never installs a system package
 manager and never will - that is the whole reason it is separate from a
-personal dotfiles repo. `brew list` will stay empty, and nothing here depends
-on it.
+personal dotfiles repo. It drives the Homebrew *you* installed, and refuses to
+finish the switch when there is none.
 
-Three things follow from that, and all three are normal:
+Two things follow from that, and both are normal:
 
 | You look here | You find | Because |
 | --- | --- | --- |
-| `/Applications` | nothing | the two terminal apps go to `~/Applications/Home Manager Apps` |
-| Spotlight, ⌘-Space | nothing | those apps are symlinks, which Spotlight does not index |
+| `~/Applications/Home Manager Apps` | nothing | no app on the Nix side today - the terminals are casks, so they land in `/Applications` |
 | the shell you just ran `bootstrap.sh` in | nothing | Nix only reaches shells started afterwards |
 
-`ls ~/.nix-profile/bin` and `ls ~/Applications/Home\ Manager\ Apps` are the two
-commands that show you what really got installed. `bootstrap.sh` prints both
-when it finishes.
+`ls ~/.nix-profile/bin` and `brew list` are the two commands that show you what
+really got installed. `bootstrap.sh` prints the first when it finishes.
 
 ### The setup
+
+**First, install Homebrew** - this repo does not, and will not. Follow
+[brew.sh](https://brew.sh). Its installer asks for your password and writes
+outside your home directory, which is exactly why the decision is yours and not
+this repository's; if you are not free to make it on this Mac, see "Turn the
+Homebrew part off" below and skip this step.
+
+Check that it worked, in a new terminal:
+
+```sh
+brew --version
+```
+
+Then:
 
 ```sh
 git clone https://github.com/modzs/dotfiles-work.git ~/.dotfiles
@@ -64,6 +80,16 @@ state first and skips what is already done.
 That is the whole loop: edit `home.nix`, run `./rebuild.sh`, open a new shell if
 you changed something the shell reads at startup.
 
+It applies both halves. Home Manager writes your home directory, then the last
+step hands the generated Brewfile to `brew bundle install`, so a formula or cask
+you added is installed by the same command. That step only ever installs and
+upgrades - it never uninstalls, so anything you installed with `brew` by hand
+stays where it is.
+
+The Homebrew step runs on every rebuild, not only when the lists change, and it
+lets Homebrew update itself first. A rebuild is therefore not instant and does
+need the network.
+
 ---
 
 ## See what would happen, without changing anything
@@ -82,7 +108,18 @@ only `./bootstrap.sh` and `./rebuild.sh` run it.
 
 ## Add or remove a tool
 
-Edit the `home.packages` list in `home.nix`:
+There are two lists, and which one you use decides what you get.
+
+**Nix** (`home.packages`) gives you a version pinned by `flake.lock`: the same
+everywhere, forever, until you deliberately update. Use it for command-line
+tools. **Homebrew** (`brews` and `casks`) gives you whatever Homebrew resolves
+on the day you rebuild, and puts applications in `/Applications` where Spotlight
+finds them. Use it for GUI applications, and for anything not in nixpkgs.
+
+Never put the same tool in both. Two copies on your `PATH` are resolved by an
+ordering you did not choose, and `tests/homebrew.test.sh` fails if it happens.
+
+### From Nix
 
 ```nix
   home.packages = with pkgs; [
@@ -103,6 +140,39 @@ check before you add one:
 2. **Does it exist for both architectures?** `tests/packages.test.sh` will tell
    you - it evaluates every declared package for `aarch64-darwin` *and*
    `x86_64-darwin` and fails naming any that is missing from either.
+
+### From Homebrew
+
+Edit the two lists near the top of `home.nix`:
+
+```nix
+  brews = [ "herdr" "gh" ];
+  casks = [ "wezterm" "claude-code" "ghostty" ];
+```
+
+Then `./rebuild.sh`. Find names with `brew search <thing>`.
+
+**Removing a name from these lists does not uninstall anything.** It only stops
+the rebuild from installing it. That is deliberate - see "What this touches" in
+[README.md](README.md) - and it means uninstalling is a thing you do yourself:
+
+```sh
+brew uninstall <formula>
+brew uninstall --cask <cask>
+```
+
+### Turn the Homebrew part off
+
+Empty both lists:
+
+```nix
+  brews = [ ];
+  casks = [ ];
+```
+
+With both lists empty the Homebrew step is not part of the rebuild at all, so
+Homebrew does not have to be installed and its absence is not an error. Nothing
+already installed is removed - emptying the lists never uninstalls anything.
 
 ---
 
@@ -198,9 +268,13 @@ Each line names a store path. Run its `activate` script to go back:
 nix run ~/.dotfiles#home-manager -- uninstall
 ```
 
-That restores your home directory. Nix itself stays installed; removing Nix is a
-separate, system-level operation and is deliberately not something this repo
-does.
+That restores your home directory. Two things it does not undo, both on purpose:
+
+- **the Homebrew formulae and casks stay installed.** This repo never uninstalls
+  anything through Homebrew, and that does not change just because you are
+  removing the repo. Use `brew uninstall` on whatever you no longer want;
+- **Nix itself stays installed.** Removing Nix is a separate, system-level
+  operation, and so is removing Homebrew.
 
 ---
 
@@ -215,6 +289,11 @@ nix build .#default       # does it still build?
 ./tests/run.sh            # do the tests still pass?
 ./rebuild.sh              # apply it
 ```
+
+This pins only the Nix half. Homebrew's formulae and casks are not pinned by
+anything here - `brew bundle install` upgrades them as Homebrew sees fit, on
+every rebuild. That is the cost of having them come from Homebrew, and it is
+why the tools worth keeping reproducible are on the Nix side.
 
 Commit the resulting `flake.lock` from a machine you are willing to commit from.
 
@@ -251,8 +330,26 @@ If a new terminal still cannot find it, the Nix block is missing from
 `/etc/zshrc`; see [README.md](README.md#what-this-touches-and-what-it-does-not)
 for what to do about that on a Mac you do not administer.
 
+**`dotfiles-work: no Homebrew at ...`** - the rebuild got all the way to its
+last step and found no `brew` to talk to. Everything Nix installs is already in
+place; only the formulae and casks are missing. Install Homebrew from
+[brew.sh](https://brew.sh) and run `./rebuild.sh` again, or empty the `brews`
+and `casks` lists in `home.nix` if you would rather not have it. If Homebrew
+*is* installed, check `HOMEBREW_PREFIX`: the step trusts that variable when the
+environment sets it, and a stale value points it at the wrong place.
+
+**A rebuild succeeds but `gh` or `herdr` is not found** - Homebrew installed
+them, but your shell cannot see Homebrew's `bin` directory. This repo finds
+`brew` by its prefix rather than through `PATH`, so the rebuild does not depend
+on the thing your shell is missing. Add Homebrew's own line to `~/.zprofile`:
+
+```sh
+eval "$(/opt/homebrew/bin/brew shellenv)"
+```
+
 **A package will not build** - check that it exists for macOS and for your
 architecture; see "Add or remove a tool" above.
 
-**The terminal apps are not in Spotlight** - expected. See the GUI apps section
-in [README.md](README.md).
+**The terminal apps are not in Spotlight** - they should be; they are Homebrew
+casks in `/Applications` now. If they are not, check that the cask actually
+installed: `brew list --cask`.

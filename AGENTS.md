@@ -4,29 +4,53 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## The design rule
 
-**Nothing this repository does may affect anything outside the user's home directory.**
+**This repository must not reconfigure a Mac the user does not administer.**
 
 That is the entire reason it exists, separately from a personal dotfiles repo. It
 is for Macs the user does not administer, where a configuration that renames the
 machine or prunes system packages is not merely rude but dangerous - the setup
 this one replaces would have uninstalled an employer's security agent.
 
-Every design question resolves against that rule. Concretely, this repo must never:
+The rule used to be stated more strictly, as "nothing this repository does may
+affect anything outside the user's home directory", and for a while that was
+literally true. It is not any more. On the owner's explicit instruction this
+configuration now drives Homebrew: `home.nix` generates a Brewfile and a Home
+Manager activation step runs `brew bundle install` against it on every switch,
+which writes into Homebrew's prefix and puts casks in `/Applications`. That is
+the one place the boundary has moved, it moved deliberately, and the honest
+statement of what is left is the heading above.
+
+What follows from it, and still holds without exception - this repo must never:
 
 - rename the machine, or set any `networking.*` or `system.defaults` option;
-- write to `/etc`, `/Library`, `/usr`, `/opt`, or `/Applications`;
-- install or manage Homebrew, or any other system-wide package manager;
+- write to `/etc`, `/Library`, `/usr`, or `/opt`, other than by asking an
+  existing Homebrew to install what the Brewfile lists;
+- **install, update or remove Homebrew itself**, or any other system-wide
+  package manager. Homebrew is the user's, installed by hand; this repo finds it
+  and fails with an explanation when it is absent;
+- **remove anything Homebrew installed.** There is no `cleanup`, no `--zap`, no
+  `brew uninstall`, and there must never be one. On this machine Homebrew is the
+  user's general-purpose package manager, so a declarative cleanup would delete
+  software installed by hand for reasons this repo knows nothing about - a
+  security agent among them. This is the single most dangerous change anyone
+  could make here;
 - manage other user accounts, sudoers, sshd, or PAM;
 - require `sudo` for a rebuild. Installing Nix is the one and only `sudo`, and
   `bootstrap.sh` is the only place it happens - and it happens inside the
-  Determinate installer, not in this repo's own code.
+  Determinate installer, not in this repo's own code. Installing Homebrew needs
+  a password too, which is exactly why this repo does not do it.
 
-The rule is enforced mechanically, not by memory: `tests/safety.test.sh` fails if
+The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
 the evaluated configuration, if a managed file targets a path outside `$HOME`, if
-any tracked script gains a privilege escalation, or if anything that executes
-grows a Homebrew reference. Read that file before changing the structure of the
-configuration; it explains what each check asserts and why a grep would not do.
+any tracked script gains a privilege escalation, if any script this repo runs so
+much as mentions Homebrew, or if the built artifact embeds a Homebrew path other
+than the two an existing `brew` lives at. `tests/homebrew.test.sh` runs the
+Homebrew step against a recording stand-in for `brew` and fails if it passes
+anything that could uninstall, if a missing Homebrew produces a raw error rather
+than an explanation, or if a tool ends up installed by both Nix and Homebrew.
+Read both files before changing the structure of the configuration; they explain
+what each check asserts and why a grep would not do.
 
 The second rule, which follows from the first: **no employer-specific content,
 ever**. No company names, domains, hostnames, proxy addresses, certificate paths
@@ -76,6 +100,12 @@ documents that seam.
   `bootstrap.sh`, `rebuild.sh`, `lib/*.sh` and `tests/*.sh`.
 - The scripts are bash; an agent's own shell here is often zsh. Test a library
   with `/bin/bash -c '. lib/x.sh; fn'`, never by sourcing it into your own shell.
+- What gets installed is declared in two lists, not one: `home.packages` for
+  nixpkgs and the `brews`/`casks` lists at the top of `home.nix` for Homebrew.
+  Nothing may appear in both - two copies on `PATH` are resolved by an ordering
+  the user never chose - and `tests/homebrew.test.sh` fails if one does. Node
+  stays on the Nix side deliberately: a Homebrew node puts its global npm prefix
+  outside the home directory.
 - `flake.nix` has exactly two adjustable values, `user` and `homeDirectory`, one
   line each. `lib/flake-settings.sh` is the single definition of how they are
   read and rewritten; both scripts and the tests go through it. The architecture
@@ -94,6 +124,10 @@ documents that seam.
   `copyApps` (needs the macOS App Management permission, and aborts activation
   without it) instead of `linkApps`. This repo pins `linkApps` on purpose;
   `home.nix` and README.md explain the trade.
+- Home Manager replaces `PATH` with a fixed list of Nix store paths before it
+  runs an activation script, so an activation step cannot find a program the way
+  a shell would. The Homebrew step locates `brew` by absolute prefix, preferring
+  `HOMEBREW_PREFIX` when the environment carries one.
 - `programs.zsh.initContent` defaults to order 1000, but Home Manager emits shell
   aliases at 1150 and syntax highlighting at 1200. The `~/.zshrc.local` include
   is at `lib.mkOrder 1500` so it genuinely runs last.

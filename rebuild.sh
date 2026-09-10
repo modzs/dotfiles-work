@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Apply this configuration to your home directory.
 #
-# No sudo. Nothing outside $HOME is written, and nothing here can ask for a
-# privilege it does not have. See README.md for what that means and AGENTS.md
-# for why it is the whole point of this repo.
+# No sudo, and nothing here can ask for a privilege it does not have. What this
+# writes is your home directory, plus - through a Homebrew you installed
+# yourself - the formulae and casks home.nix lists. It never removes either.
+# See README.md for exactly where that line falls and AGENTS.md for why.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

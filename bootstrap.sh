@@ -3,9 +3,15 @@
 # Run this once. After it finishes, use ./rebuild.sh for every later change.
 #
 # The only thing here that needs sudo is the Nix installer in step 1, and that
-# is the only time this repo ever asks for it. Nothing below step 1 touches
-# anything outside your home directory: no machine name, no /etc, no system
-# package manager, no macOS system settings. See README.md.
+# is the only time this repo ever asks for it. No machine name, no /etc, no
+# macOS system settings, and no package manager installed on your behalf.
+#
+# One part of the switch in step 6 does reach outside your home directory: it
+# hands a generated Brewfile to a Homebrew you installed yourself, and Homebrew
+# installs into its own prefix. It only ever adds; it never removes, and it
+# never installs or updates Homebrew itself. If Homebrew is not there, step 6
+# says so and stops - everything before it has already been applied. README.md
+# is exact about all of this.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -109,7 +115,9 @@ seed_local_file "$HOME/.gitconfig.local" "~/.gitconfig.local" <<'LOCAL'
 LOCAL
 
 echo "==> Step 6: first build and switch"
-# No sudo. Home Manager writes into $HOME and asks for nothing else.
+# No sudo. Home Manager writes into $HOME, and its last activation step asks an
+# already-installed Homebrew for the formulae and casks home.nix lists. Neither
+# needs a privilege this script has not already got.
 #
 # `nix run ~/.dotfiles#home-manager` runs the Home Manager revision this repo's
 # flake.lock pins, so the tool and the configuration it activates can never be

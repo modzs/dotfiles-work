@@ -1,10 +1,33 @@
 #!/usr/bin/env bash
 # The design rule, made executable.
 #
-# This repository exists for one reason: nothing it does may affect anything
-# outside the user's home directory. Every check here asserts a piece of that
-# rule against the artifact that really decides it, not against the prose in
-# README.md:
+# The rule this repository exists for is that it must not reconfigure a Mac the
+# user does not administer. It used to be stated as "nothing it does may affect
+# anything outside the user's home directory", and every check here enforced
+# that literally.
+#
+# That is no longer the whole truth, and this file says so out loud rather than
+# quietly enforcing less. On the user's instruction this configuration now
+# drives Homebrew: it generates a Brewfile and asks an existing Homebrew to
+# install what it lists, which writes into /opt/homebrew and puts casks in
+# /Applications. So the rule has narrowed, deliberately and in exactly one
+# place - see AGENTS.md and README.md, which state the narrowed version in the
+# same words - and the checks below have narrowed with it:
+#
+# - test_nothing_here_installs_homebrew and
+#   test_the_only_homebrew_paths_are_the_two_prefixes replace a single check
+#   that asserted the built artifact contained no Homebrew path at all. What
+#   still holds is that this repo never installs, updates or removes Homebrew
+#   itself, and that the only Homebrew paths it embeds are the two it needs to
+#   find an existing `brew`. What it does with that `brew` - install, never
+#   uninstall - is exercised by running it, in tests/homebrew.test.sh.
+#
+# Nothing else changed. Every other check below is the original one: no
+# nix-darwin, no system-level options, no managed file outside $HOME, no
+# privilege escalation anywhere in this repo's own scripts.
+#
+# Each check asserts against the artifact that really decides it, not against
+# the prose in README.md:
 #
 # - flake.lock, because that is the complete, machine-written record of every
 #   flake this configuration pulls in - including one added indirectly, which a
@@ -12,7 +35,8 @@
 # - the evaluated option tree, because an option that does not exist cannot be
 #   set. Standalone Home Manager has no `networking`, no `system.defaults`, no
 #   `homebrew` and no `users`, and this proves that is still true rather than
-#   trusting it;
+#   trusting it. The Homebrew step is a Home Manager activation script, not a
+#   nix-darwin module, so it does not and must not make any of those settable;
 # - the evaluated file targets, because a relative target is by definition
 #   inside $HOME and an absolute one is by definition not;
 # - a real shell tokenizer over every tracked script, because `sudo` written in
@@ -28,7 +52,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 6
+dotfiles_test_expect 7
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -241,35 +265,138 @@ PY
   pass "scripts: no tracked shell script runs sudo or any other privilege escalation"
 }
 
-# --- nothing that executes here knows about Homebrew --------------------------
+# --- nothing here installs, updates or removes Homebrew itself ----------------
 
-test_nothing_executable_references_homebrew() {
-  local generation hits
+test_nothing_here_installs_homebrew() {
+  local script report status=0
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "Homebrew installer check (python3 not found)"
+    return 0
+  fi
+
+  # The narrowed rule, first half. This configuration drives a Homebrew the
+  # user installed themselves, and installing Homebrew is a different act
+  # entirely: its installer asks for a password and writes to /opt or
+  # /usr/local. On a machine someone else administers that is not this repo's
+  # decision to make, so it must not be able to make it - and `brew update`
+  # against Homebrew's own installation, or `brew uninstall` against something
+  # it manages, are the same kind of act in the other direction.
+  #
+  # Scoped to the scripts a user runs - bootstrap.sh, rebuild.sh and the
+  # libraries they source, which between them are every line of shell this repo
+  # executes on a real machine. A convenience like "let me just install it for
+  # you" would appear there. The single place this repo may call `brew` is
+  # home.nix's activation step, and what that step does is exercised by running
+  # it in tests/homebrew.test.sh.
+  #
+  # Tokenized rather than grepped, for the same reason the sudo check above is:
+  # these scripts have to be free to *explain* Homebrew in a comment, and a
+  # word in a comment is not a command.
+  script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-brewscan.XXXXXX") \
+    || fail "could not create a temp file for the tokenizer"
+  cat >"$script" <<'SCAN'
+import shlex, sys
+
+# Every spelling that would run Homebrew, plus the ways its own installer is
+# fetched. The installer is looked for in the raw source as well as in the
+# tokens, because a copy-pasteable install line sitting in a comment is a step
+# someone will follow.
+BANNED = {"brew"}
+INSTALLERS = (
+    "raw.githubusercontent.com/homebrew",
+    "homebrew/install",
+    "github.com/homebrew/brew",
+)
+
+problems = []
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    lexer = shlex.shlex(source, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as error:
+        problems.append("%s: could not be tokenized (%s)" % (path, error))
+        continue
+    for token in tokens:
+        if token in BANNED or token.rsplit("/", 1)[-1] in BANNED:
+            problems.append("%s: runs %r" % (path, token))
+    lowered = source.lower()
+    for installer in INSTALLERS:
+        if installer in lowered:
+            problems.append("%s: names the Homebrew installer (%r)" % (path, installer))
+
+print("\n".join(problems))
+SCAN
+
+  report=$(dotfiles_tracked_except "$(dotfiles_test_self)" \
+    bootstrap.sh rebuild.sh 'lib/*.sh' \
+    | xargs -0 python3 "$script") || status=$?
+  rm -f "$script"
+  [ "$status" = 0 ] || fail "could not tokenize the scripts this repo runs"
+
+  [ -z "$report" ] \
+    || fail "a script this repo runs reaches for Homebrew, which only home.nix may: $report"
+
+  pass "scripts: nothing here installs, updates or removes Homebrew itself"
+}
+
+# --- the only Homebrew the artifact knows about is an existing one ------------
+
+test_the_only_homebrew_paths_are_the_two_prefixes() {
+  local generation script hit hits unexpected=""
   if ! command -v nix >/dev/null 2>&1; then
     skip "Homebrew path check (nix not found)"
     return 0
   fi
 
-  # Homebrew is a system-wide package manager rooted outside the home
-  # directory, and the setup this repo replaces drove it with
-  # `cleanup = "zap"`, which uninstalls anything not listed - a security agent
-  # installed by an employer's IT included. Nothing that runs here may grow a
-  # path into it or a call to it.
+  # The narrowed rule, second half, and the check this file used to make in its
+  # absolute form: the built activation package contained no Homebrew path at
+  # all. It now contains two, because finding an existing `brew` is the whole
+  # mechanism - Home Manager replaces PATH with Nix store paths before running
+  # an activation script, so an absolute probe is the only way left.
   #
-  # This checks the built artifact - the activation package including the
-  # activate script, home-files tree, and profile - not source code. A reference
-  # in source that is dead code or in a comment is not a problem; a reference
-  # in the generated activation bundle would cause the configuration to fail
-  # on a machine that has no Homebrew installed.
-  generation=$(nix build --no-link --print-out-paths "$ROOT#packages.$SYSTEM.default" 2>/dev/null) \
+  # Two, and no more. A third would mean something here had started reaching
+  # into Homebrew's own tree - its Cellar, its Library, its repository - rather
+  # than just asking its `brew` to install a Brewfile.
+  #
+  # This checks the built artifact, not the source: a path in a comment is not
+  # a path the machine follows. Two artifacts, because the activation package
+  # holds the generation tree and the activate script while the Homebrew step
+  # is its own store path referenced from it - grepping the generation alone
+  # would look at everything except the file that does the reaching.
+  generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
+  script=$(dotfiles_brew_bundle_script "$generation") \
+    || fail "the activation script does not run a Homebrew step at all"
 
-  hits=$(grep -r -E '/opt/homebrew|/usr/local/Homebrew' "$generation" 2>/dev/null || true)
+  hits=$(grep -r -o -h -E '/opt/homebrew[A-Za-z0-9_./-]*|/usr/local/(Homebrew|Cellar|Caskroom)[A-Za-z0-9_./-]*|/usr/local/bin/brew' \
+    "$generation" "$script" 2>/dev/null | sort -u || true)
 
-  [ -z "$hits" ] \
-    || fail "the built activation package contains Homebrew paths: $hits"
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    case "$hit" in
+      /opt/homebrew/bin/brew|/usr/local/bin/brew) : ;;
+      *) unexpected="$unexpected $hit" ;;
+    esac
+  done <<EOF
+$hits
+EOF
 
-  pass "artifact: the activation package contains no Homebrew paths"
+  [ -z "$unexpected" ] \
+    || fail "the activation package reaches into Homebrew's own tree, not just its brew:$unexpected"
+
+  # Both of them, and not merely "nothing unexpected". An empty result would
+  # pass the check above while meaning the artifact had stopped looking for
+  # Homebrew at all - which is how a check that guards a narrowing quietly
+  # becomes a check that guards nothing.
+  assert_contains "$hits" "/opt/homebrew/bin/brew" \
+    "the activation package does not look for Homebrew on Apple silicon"
+  assert_contains "$hits" "/usr/local/bin/brew" \
+    "the activation package does not look for Homebrew on Intel"
+
+  pass "artifact: the only Homebrew paths are the two prefixes an existing \`brew\` lives at"
 }
 
 test_flake_pulls_in_no_system_configuration_tool
@@ -277,6 +404,7 @@ test_configuration_has_no_system_level_options
 test_every_managed_file_target_is_inside_home
 test_home_directory_matches_the_declared_one
 test_no_tracked_script_escalates_privileges
-test_nothing_executable_references_homebrew
+test_nothing_here_installs_homebrew
+test_the_only_homebrew_paths_are_the_two_prefixes
 
 test_summary
