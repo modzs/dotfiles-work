@@ -44,8 +44,9 @@ really got installed. `bootstrap.sh` prints the first when it finishes.
 **First, install Homebrew** - this repo does not, and will not. Follow
 [brew.sh](https://brew.sh). Its installer asks for your password and writes
 outside your home directory, which is exactly why the decision is yours and not
-this repository's; if you are not free to make it on this Mac, see "Turn the
-Homebrew part off" below and skip this step.
+this repository's. This step is not optional: if you are not free to make that
+decision on this Mac, this repo is not usable as it stands. See "There is no way
+to turn the Homebrew part off" below.
 
 Check that it worked, in a new terminal:
 
