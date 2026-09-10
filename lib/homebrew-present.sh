@@ -17,7 +17,10 @@
 # the environment sets it - look only there, because a machine told where
 # Homebrew is and not having it there has no usable Homebrew, and quietly using
 # a different one would be worse - and otherwise try the two prefixes macOS
-# Homebrew supports, Apple silicon first. Change one, change the other.
+# Homebrew supports, Apple silicon first. Change one, change the other - and the
+# agreement is held by a test rather than by this paragraph:
+# tests/homebrew.test.sh runs both sides against the same prefixes and fails if
+# their verdicts differ.
 #
 # Must stay bash 3.2 compatible - macOS ships no newer bash. See AGENTS.md.
 

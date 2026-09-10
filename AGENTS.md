@@ -79,7 +79,11 @@ it found instead of returning it - not that the check would notice. `tests/homeb
 against a recording stand-in for `brew` and fails if it passes anything that
 could uninstall or upgrade, if it lets either Homebrew cleanup variable through
 from the environment, if a missing Homebrew produces a raw error rather than an
-explanation, or if a tool ends up installed by both Nix and Homebrew.
+explanation, or if a tool ends up installed by both Nix and Homebrew. Where
+`brew` is gets answered twice - `lib/homebrew-present.sh` for bootstrap's
+preflight, which turns a Mac without Homebrew away before Nix is installed, and
+the activation step in `home.nix` - so the same file runs both against the same
+prefixes and fails if their verdicts differ. Change one, change the other.
 Read both files before changing the structure of the configuration; they explain
 what each check asserts and why a grep would not do.
 

@@ -81,6 +81,12 @@ let
     # one. Otherwise the two prefixes macOS Homebrew supports are tried, Apple
     # silicon first.
     #
+    # bootstrap.sh answers the same question before anything is installed, in
+    # lib/homebrew-present.sh, so this rule exists twice. The two must agree -
+    # a preflight that accepts a Mac this step then refuses is the failure it
+    # exists to prevent - and tests/homebrew.test.sh runs both against the same
+    # prefixes and fails if their verdicts differ.
+    #
     # That first branch is also the only lever that makes the missing-Homebrew
     # failure path above reachable in a test on a machine that *has* Homebrew,
     # which is every CI runner - macos-latest ships it preinstalled.
