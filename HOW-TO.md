@@ -394,12 +394,11 @@ when the environment sets it, and a stale value points it at the wrong place.
 them, but your shell cannot see Homebrew's `bin` directory. This repo finds
 `brew` by its prefix rather than through `PATH`, so the rebuild does not depend
 on the thing your shell is missing. Add Homebrew's own line to `~/.zprofile`,
-using whichever of these two paths exists on your Mac - the first on Apple
-silicon, the second on Intel:
+replacing `<prefix>` with `/opt/homebrew` on Apple silicon or `/usr/local` on
+Intel:
 
 ```sh
-eval "$(/opt/homebrew/bin/brew shellenv)"
-eval "$(/usr/local/bin/brew shellenv)"
+eval "$(<prefix>/bin/brew shellenv)"
 ```
 
 **A package will not build** - check that it exists for macOS and for your

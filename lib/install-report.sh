@@ -202,12 +202,24 @@ install_report() {
   # First, because everything else here is unverifiable from the shell the user
   # is standing in. This is the sentence whose absence turned a complete
   # install into "it installed nothing".
+  #
+  # What this file may say, and the line not to cross. It reports what was
+  # installed and where it went. It reports reachability only for the thing it
+  # actually probes, which is ~/.nix-profile/bin and nothing else. It never
+  # tells the user something is on their PATH without having checked.
+  #
+  # The Homebrew half is outside that: nothing here probes it, and it is not
+  # safely assumable either. Homebrew's installer prints the `brew shellenv`
+  # lines rather than writing them to a profile, and the preflight that let
+  # this run get here asks only whether `brew` exists at a prefix - never
+  # whether it is on PATH. So a Mac can reach this point with Homebrew's tools
+  # installed and invisible to the shell, which is why HOW-TO.md carries a
+  # troubleshooting entry for exactly that. A friendly "and Homebrew's are
+  # already reachable" here would be the one thing this file must not do.
   printf '%sNone of the Nix tools above is on THIS terminal PATH. Nix only adds\n' "$indent"
   printf '%sitself to shells that start after it was installed, so this shell -\n' "$indent"
   printf '%sthe one you ran ./bootstrap.sh from - cannot see any of them, and\n' "$indent"
-  printf '%sneither can ./rebuild.sh if you run it here. Homebrew is different:\n' "$indent"
-  printf '%syou installed it before this ran, so what it put on your PATH is\n' "$indent"
-  printf '%sreachable here already.\n' "$indent"
+  printf '%sneither can ./rebuild.sh if you run it here.\n' "$indent"
   printf '\n'
   printf '%s  ==> Open a new terminal now. Everything below assumes you have.\n' "$indent"
 
