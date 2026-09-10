@@ -174,6 +174,17 @@ Edit the two lists near the top of `home.nix`:
 
 Then `./rebuild.sh`. Find names with `brew search <thing>`.
 
+One thing to know before adding a cask, because it decides how far the rebuild
+reaches. Most casks drop an application into `/Applications` or a binary onto
+Homebrew's `bin` path, and that is the whole of it. Some - Zoom, Docker Desktop
+and Google Drive are the everyday examples - ship a `pkg` instead, and
+installing one hands the payload to the macOS installer, which runs with
+privilege: it can write under `/Library`, leave a receipt, install a launch
+daemon, and ask for your password mid-rebuild. `brew info --cask <name>` tells
+you which kind you are looking at. Nothing stops you choosing one; it is worth
+knowing that it is the cask, not this repo, doing that, and that it only happens
+for a name you added yourself.
+
 **Removing a name from these lists does not uninstall anything.** It only stops
 the rebuild from installing it. That is deliberate - see "What this touches" in
 [README.md](README.md) - and it means uninstalling is a thing you do yourself:

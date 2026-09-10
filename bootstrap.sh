@@ -55,8 +55,9 @@ fi
 # password before the bad news. This asks a path question only; it never runs
 # Homebrew.
 echo "==> Preflight: Homebrew"
-BREW="$(dotfiles_homebrew_require)"
-echo "    found $BREW"
+# Not captured: it reports what it found itself, so no path to `brew` is ever
+# held here. See the comment on the function.
+dotfiles_homebrew_require
 
 echo "==> Step 1: Determinate Nix"
 echo "    This is the one and only step that asks for your password."

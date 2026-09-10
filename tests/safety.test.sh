@@ -375,6 +375,15 @@ test_nothing_here_installs_homebrew() {
   # test_the_homebrew_scan_tells_an_invocation_from_a_path_test proves the
   # narrowed rule still catches the thing it is for.
   #
+  # What this cannot catch, stated plainly because a guard someone believes is
+  # total is worse than one whose edge is written down: it matches a literal
+  # command word, so a script that put a brew path in a variable and ran
+  # `"$BREW" install ...` would tokenize as `$BREW`, whose basename is not
+  # `brew`, and pass. Nothing here does that - lib/homebrew-present.sh reports
+  # the path it finds rather than returning one, so no script holds a runnable
+  # `brew` - but that is a property of how these scripts are written, not
+  # something this check enforces.
+  #
   # This does read implementation source, and that has been raised and settled.
   # It is not the anti-pattern the rest of this suite avoids, and the line
   # between them is what the source is being asked to stand for. A test that

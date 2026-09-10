@@ -34,7 +34,7 @@ rather than claiming a containment that no longer holds.
 
 | This configuration does | This configuration does not |
 | --- | --- |
-| Install command-line tools for your account from Nix, inside your home directory | Write to `/etc`, `/private`, or any macOS system domain, by any means. Write anywhere outside your home directory *other than* by asking an existing Homebrew to install what the list holds - on Intel that prefix is `/usr/local`, and casks land in `/Applications` |
+| Install command-line tools for your account from Nix, inside your home directory | Write anything itself outside your home directory. The one way it reaches further is by asking an existing Homebrew to install the names on the list - Homebrew's own prefix, `/usr/local` on Intel, and `/Applications` for casks. Where a cask goes beyond that is the cask's doing: a `pkg` cask hands its payload to the macOS installer, which can write to `/Library` and prompt for a password. That only happens for a name you put on the list yourself |
 | Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself - though Homebrew may still auto-update itself when asked to install, see below |
 | Add to what Homebrew has installed | Uninstall *anything*, or let the environment ask it to - see below |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
@@ -357,8 +357,10 @@ This is not a fork or a subset of one. It is a separate, smaller thing built on
 a different foundation: a personal Mac config typically uses `nix-darwin`, which
 configures the *system* - the machine name, macOS defaults, sudo, and Homebrew
 along with them. Almost all of that is exactly what must not happen here, so it
-is not present: there is no `nix-darwin` input, and a rebuild never asks for a
-password.
+is not present: there is no `nix-darwin` input, and nothing here runs `sudo` or
+asks you for a password of its own. The one prompt a rebuild can produce is
+Homebrew's, when a cask has to replace an application you do not own - see
+"What this touches" above.
 
 Homebrew is the one thing the two have in common, and even there the mechanism
 differs. `nix-darwin` has Homebrew options; standalone Home Manager has none, so

@@ -44,14 +44,19 @@ dotfiles_homebrew_find() {
   done
 }
 
-# Print the path of the Homebrew this machine would use, or explain and fail.
-# The explanation matches the activation step's in substance, because a user who
-# hits one has to be told the same thing either way.
+# Report which Homebrew this machine would use, or explain and fail.
+#
+# Deliberately reports rather than returns. A caller that captured the path
+# would be a script holding a ready-to-run `brew` in a variable, and
+# tests/safety.test.sh cannot see through a variable: `"$BREW" install ...`
+# tokenizes as `$BREW`, whose basename is not `brew`, so the check that exists
+# to keep these scripts from invoking Homebrew would pass. Nothing here needs
+# the path, so nothing here holds one.
 dotfiles_homebrew_require() {
   local found
   found=$(dotfiles_homebrew_find)
   if [ -n "$found" ]; then
-    printf '%s\n' "$found"
+    echo "    found $found"
     return 0
   fi
 

@@ -47,7 +47,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 10
+dotfiles_test_expect 11
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -471,8 +471,10 @@ test_the_preflight_accepts_a_mac_with_homebrew() {
 
   [ "$status" = 0 ] \
     || fail "the preflight refused a machine that has Homebrew where HOMEBREW_PREFIX says (exit $status)"
-  assert_eq "$output" "$root/prefix/bin/brew" \
-    "the preflight did not report the brew it found"
+  # It reports the path rather than returning it - see the comment on the
+  # function - so this asserts on what the user is told.
+  assert_contains "$output" "$root/prefix/bin/brew" \
+    "the preflight did not report which brew it found"
 
   pass "preflight: a Mac with Homebrew passes, and the brew is located not run"
 }
@@ -523,8 +525,62 @@ test_a_missing_homebrew_fails_with_an_explanation() {
 
 # --- nothing is installed twice -----------------------------------------------
 
+# The package names nixpkgs knows the declared packages by, space separated.
+dotfiles_nix_pnames() {
+  nix_eval \
+    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\"" \
+    --apply 'cfg: builtins.concatStringsSep " " (map (p: p.pname or p.name or "") cfg.config.home.packages)' \
+    2>/dev/null
+}
+
+# The executables the Nix half actually puts on PATH, space separated, read out
+# of the built profile rather than guessed from package names.
+dotfiles_nix_executables() {
+  local generation=$1
+  [ -d "$generation/home-path/bin" ] || return 1
+  ( cd "$generation/home-path/bin" && ls ) | tr '\n' ' '
+}
+
+# Print the names the Brewfile and the Nix half both provide.
+#
+# Two comparisons, because the two halves collide in two different ways and
+# neither test alone sees both:
+#
+# - against the nixpkgs package names, normalizing the `-bin` suffix nixpkgs
+#   puts on a prebuilt Darwin binary. `ghostty-bin` is the same program as the
+#   `ghostty` cask, and this is the comparison that catches a cask, which
+#   installs an app rather than anything on PATH;
+# - against the executables the Nix half really installs. This is the one that
+#   matters for a formula, and it is a comparison rather than a table of name
+#   aliases on purpose: nixpkgs calls it `nodejs` and Homebrew calls it `node`,
+#   two strings no normalization turns into each other, but both put `node` on
+#   PATH - and "two copies on PATH" is the defect itself, not a proxy for it.
+#   Anything else spelled differently by the two package managers is caught the
+#   same way, without anyone having to maintain a dictionary.
+dotfiles_duplicate_collisions() {
+  local brewfile=$1 nix_names=$2 nix_bins=$3
+  local entry name nix_name nix_bin collisions=""
+
+  while IFS= read -r entry; do
+    name=$(printf '%s\n' "$entry" | sed -nE 's/^[[:space:]]*(brew|cask) "([^"]+)".*/\2/p')
+    [ -n "$name" ] || continue
+    for nix_name in $nix_names; do
+      case "${nix_name%-bin}" in
+        "$name") collisions="$collisions $name"; continue 2 ;;
+      esac
+    done
+    for nix_bin in $nix_bins; do
+      case "$nix_bin" in
+        "$name") collisions="$collisions $name"; continue 2 ;;
+      esac
+    done
+  done <"$brewfile"
+
+  printf '%s\n' "$collisions"
+}
+
 test_no_tool_is_installed_by_both_nix_and_homebrew() {
-  local generation brewfile nix_names entry name nix_name collisions=""
+  local generation brewfile nix_names nix_bins collisions
   if ! command -v nix >/dev/null 2>&1; then
     skip "duplicate installation check (nix not found)"
     return 0
@@ -540,29 +596,64 @@ test_no_tool_is_installed_by_both_nix_and_homebrew() {
   brewfile="$generation/home-files/$BREWFILE_TARGET"
   [ -f "$brewfile" ] || fail "the generation writes no $BREWFILE_TARGET"
 
-  nix_names=$(nix_eval \
-    "homeConfigurations.\"$(dotfiles_config_name "$SYSTEM")\"" \
-    --apply 'cfg: builtins.concatStringsSep " " (map (p: p.pname or p.name or "") cfg.config.home.packages)' \
-    2>/dev/null) \
+  nix_names=$(dotfiles_nix_pnames) \
     || fail "could not evaluate home.packages"
 
-  # nixpkgs suffixes a prebuilt Darwin binary with -bin: `ghostty-bin` is the
-  # same program as the `ghostty` cask, and comparing the raw names would miss
-  # exactly the collision this repo already had.
-  while IFS= read -r entry; do
-    name=$(printf '%s\n' "$entry" | sed -nE 's/^[[:space:]]*(brew|cask) "([^"]+)".*/\2/p')
-    [ -n "$name" ] || continue
-    for nix_name in $nix_names; do
-      case "${nix_name%-bin}" in
-        "$name") collisions="$collisions $name" ;;
-      esac
-    done
-  done <"$brewfile"
+  nix_bins=$(dotfiles_nix_executables "$generation") \
+    || fail "could not list the executables the Nix half installs"
+
+  collisions=$(dotfiles_duplicate_collisions "$brewfile" "$nix_names" "$nix_bins")
 
   [ -z "$collisions" ] \
     || fail "installed by both Nix and Homebrew, so two copies compete on PATH:$collisions"
 
   pass "homebrew: no tool is installed by both Nix and Homebrew"
+}
+
+test_the_duplicate_guard_catches_a_differently_spelled_collision() {
+  local generation nix_names nix_bins root collisions
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "duplicate detection check (nix not found)"
+    return 0
+  fi
+
+  # The check above passes by finding nothing, which is also what a guard that
+  # cannot see anything does. So the same comparison is run here against a
+  # Brewfile that really does collide, and the case chosen is the one this
+  # repository's own documentation cites as the reason the rule exists.
+  #
+  # `node` is the case that matters and the case a name comparison alone gets
+  # wrong: nixpkgs calls the package `nodejs`, Homebrew calls the formula
+  # `node`, and those two strings never match however they are normalized. What
+  # does match is what they put on PATH, which is also the actual defect - so
+  # that is what is compared.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  nix_names=$(dotfiles_nix_pnames) \
+    || fail "could not evaluate home.packages"
+  nix_bins=$(dotfiles_nix_executables "$generation") \
+    || fail "could not list the executables the Nix half installs"
+
+  root=$(dotfiles_test_tmproot dotfiles-duplicate-fixture)
+  cat >"$root/Brewfile" <<'FIXTURE'
+# Someone adds Homebrew's node, not realising nixpkgs already provides it.
+brew "node"
+brew "gh"
+FIXTURE
+
+  collisions=$(dotfiles_duplicate_collisions "$root/Brewfile" "$nix_names" "$nix_bins")
+
+  case " $collisions " in
+    *" node "*) : ;;
+    *) fail "the duplicate guard missed node against the Nix nodejs, so it would not catch the collision it exists for (got \"$collisions\")" ;;
+  esac
+  # gh is genuinely absent from the Nix half - it moved to Homebrew - so a guard
+  # that flagged it would be matching everything rather than the real thing.
+  case " $collisions " in
+    *" gh "*) fail "the duplicate guard flagged gh, which Nix does not install - it is matching too much" ;;
+  esac
+
+  pass "homebrew: the duplicate guard catches a collision the two package namespaces spell differently"
 }
 
 test_brewfile_is_written_inside_the_home_directory
@@ -575,5 +666,6 @@ test_the_preflight_refuses_a_mac_without_homebrew
 test_the_preflight_accepts_a_mac_with_homebrew
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
+test_the_duplicate_guard_catches_a_differently_spelled_collision
 
 test_summary
