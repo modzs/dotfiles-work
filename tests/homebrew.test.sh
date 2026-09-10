@@ -8,13 +8,15 @@
 # prose - README.md and AGENTS.md say what the rules are; these checks are what
 # holds the code to them.
 #
-# Four properties, in order of how much damage getting them wrong would do:
+# Five properties, in order of how much damage getting them wrong would do:
 #
 # - the step never removes anything. Homebrew on this machine is the user's own
 #   general-purpose package manager, and the setup this repo replaces drove it
 #   with `cleanup = "zap"`, which uninstalls whatever the Brewfile does not
 #   list. Software installed by hand for unrelated reasons - an employer's
 #   security agent included - must survive every rebuild;
+# - the step runs after the Brewfile has been written, or it applies the last
+#   rebuild's package list instead of this one's;
 # - a Mac without Homebrew gets an explanation, not `brew: command not found`;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
@@ -22,7 +24,9 @@
 #
 # The step is exercised by running it, with a recording stand-in for `brew`.
 # Asserting on its source text would prove that the words are there; running it
-# proves what it does with them.
+# proves what it does with them. The one check that cannot work that way is the
+# ordering, which is a property of the built activate script rather than of the
+# step; it says so where it sits.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -33,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 6
+dotfiles_test_expect 7
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -172,15 +176,18 @@ test_the_homebrew_step_installs_and_cannot_remove() {
   home=$(printf '%s\n' "$recording" | sed -n 's/^home: //p')
   argv=$(printf '%s\n' "$recording" | sed -n 's/^argv: //p')
 
-  assert_eq "$argv" "bundle install --file $home/$BREWFILE_TARGET --force" \
-    "the Homebrew step does not run \`brew bundle install --file <Brewfile> --force\`"
+  assert_eq "$argv" "bundle install --file $home/$BREWFILE_TARGET --no-upgrade --force" \
+    "the Homebrew step does not run \`brew bundle install --file <Brewfile> --no-upgrade --force\`"
 
   # Every way `brew bundle` can be made to uninstall something. The subcommand
   # is `install`, asserted above; these are the flags that would turn even that
   # into a removal, plus `--global`, which is the mode that lets
   # $HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP switch cleanup on from the
-  # environment rather than from this repository.
-  for word in cleanup --cleanup --force-cleanup --zap -g --global uninstall remove; do
+  # environment rather than from this repository. `--upgrade` is in the list
+  # for a different reason: it does not remove anything, but it would make a
+  # rebuild replace versions of already-installed packages that the user never
+  # asked it to touch.
+  for word in cleanup --cleanup --force-cleanup --zap -g --global uninstall remove --upgrade; do
     case " $argv " in
       *" $word "*) fail "the Homebrew step passes $word, which can uninstall software the user installed by hand" ;;
     esac
@@ -189,26 +196,86 @@ test_the_homebrew_step_installs_and_cannot_remove() {
   pass "homebrew: the step runs \`brew bundle install\` and passes nothing that can uninstall"
 }
 
-test_the_homebrew_step_leaves_auto_update_on() {
+test_the_homebrew_step_does_not_touch_auto_update() {
   local recording
   if ! command -v nix >/dev/null 2>&1; then
     skip "Homebrew auto-update check (nix not found)"
     return 0
   fi
 
-  # The equivalent of nix-darwin's `onActivation.autoUpdate = true`, which is
-  # what the personal configuration this mirrors sets. Homebrew reads
-  # HOMEBREW_NO_AUTO_UPDATE as a flag - any value at all, "0" included, turns
-  # auto-update off - so the only way to leave it on is to unset the variable,
-  # and the stand-in is handed HOMEBREW_NO_AUTO_UPDATE=1 to prove the step
-  # really does.
+  # HOMEBREW_NO_AUTO_UPDATE is the user's to decide, and the step must leave it
+  # exactly as it found it. That is what nix-darwin's `onActivation.autoUpdate
+  # = true` amounts to: it declines to *set* the variable, and it never clears
+  # one the user exported - which someone on a slow or proxied network has
+  # every reason to have done.
+  #
+  # The stand-in is handed HOMEBREW_NO_AUTO_UPDATE=1 through `env -i`, so
+  # seeing 1 come back out proves both halves at once: the step did not set the
+  # variable itself, and it did not unset the value it was given.
   recording=$(dotfiles_run_brew_step) \
     || fail "could not run the Homebrew step against a stand-in brew"
 
-  assert_contains "$recording" "HOMEBREW_NO_AUTO_UPDATE: <unset>" \
-    "the Homebrew step leaves HOMEBREW_NO_AUTO_UPDATE set, which turns auto-update off"
+  assert_contains "$recording" "HOMEBREW_NO_AUTO_UPDATE: 1" \
+    "the Homebrew step changed HOMEBREW_NO_AUTO_UPDATE instead of leaving the user's value alone"
 
-  pass "homebrew: the step unsets HOMEBREW_NO_AUTO_UPDATE, leaving auto-update on"
+  pass "homebrew: the step neither sets nor clears HOMEBREW_NO_AUTO_UPDATE"
+}
+
+# --- the step runs after the Brewfile has been written -------------------------
+
+# The line number at which the built activate script announces a named
+# activation step, or empty if it never does.
+dotfiles_activation_line() {
+  local generation=$1 name=$2
+  grep -n "\"$name\"\$" "$generation/activate" \
+    | grep 'Activating' \
+    | sed -n 's/^\([0-9][0-9]*\):.*/\1/p' \
+    | head -n1
+}
+
+test_the_homebrew_step_runs_after_the_brewfile_is_written() {
+  local generation bundle link install
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "activation ordering check (nix not found)"
+    return 0
+  fi
+
+  # Read out of the BUILT activate script, which is generated public output -
+  # the activation contract Home Manager executes, in the order it executes it
+  # - and not implementation source. The order is not visible in home.nix at
+  # all: `writeBoundary` is a barrier that writes nothing, so an entry naming
+  # only it is ordered against its siblings by attribute name, and
+  # `homebrewBundle` sorts ahead of both steps below. That is a real defect
+  # rather than a stylistic one - the step reads a Brewfile `linkGeneration`
+  # writes, so running first means reading the previous generation's package
+  # list, or failing outright on a first switch - and nothing else in this
+  # suite can see it, because the other checks run the step directly against a
+  # Brewfile they placed themselves.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+
+  bundle=$(dotfiles_activation_line "$generation" homebrewBundle)
+  link=$(dotfiles_activation_line "$generation" linkGeneration)
+  install=$(dotfiles_activation_line "$generation" installPackages)
+
+  [ -n "$bundle" ] || fail "the activation script never activates homebrewBundle"
+  [ -n "$link" ] || fail "the activation script never activates linkGeneration"
+  [ -n "$install" ] || fail "the activation script never activates installPackages"
+
+  # linkGeneration writes ~/.config/dotfiles/Brewfile. Reading it before then
+  # is the difference between applying the list in home.nix and applying the
+  # one from the last rebuild.
+  [ "$bundle" -gt "$link" ] \
+    || fail "the Homebrew step runs before linkGeneration, so it reads a Brewfile that has not been written yet"
+
+  # Not correctness, but a documented promise: README.md, HOW-TO.md and
+  # bootstrap.sh all tell the user that when Homebrew is missing, everything
+  # Nix installs is already in place. Activation runs under `set -eu`, so that
+  # is only true if the Nix half has finished first.
+  [ "$bundle" -gt "$install" ] \
+    || fail "the Homebrew step runs before installPackages, so its failure would leave the Nix half unapplied"
+
+  pass "homebrew: the step activates after the Brewfile is written and the Nix packages are installed"
 }
 
 # --- a Mac without Homebrew is told so ----------------------------------------
@@ -302,7 +369,8 @@ test_no_tool_is_installed_by_both_nix_and_homebrew() {
 test_brewfile_is_written_inside_the_home_directory
 test_brewfile_lists_exactly_the_declared_formulae_and_casks
 test_the_homebrew_step_installs_and_cannot_remove
-test_the_homebrew_step_leaves_auto_update_on
+test_the_homebrew_step_does_not_touch_auto_update
+test_the_homebrew_step_runs_after_the_brewfile_is_written
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
 

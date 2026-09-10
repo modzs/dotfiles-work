@@ -8,8 +8,10 @@
 #
 # One part of the switch in step 6 does reach outside your home directory: it
 # hands a generated Brewfile to a Homebrew you installed yourself, and Homebrew
-# installs into its own prefix. It only ever adds; it never removes, and it
-# never installs or updates Homebrew itself. If Homebrew is not there, step 6
+# installs into its own prefix. It never uninstalls anything, and it never
+# installs or updates Homebrew itself. The one thing it will replace is an
+# application already sitting where a cask on its list wants to be - that list
+# is in home.nix and it is short. If Homebrew is not there, step 6
 # says so and stops - everything before it has already been applied. README.md
 # is exact about all of this.
 set -euo pipefail

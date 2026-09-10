@@ -82,13 +82,14 @@ you changed something the shell reads at startup.
 
 It applies both halves. Home Manager writes your home directory, then the last
 step hands the generated Brewfile to `brew bundle install`, so a formula or cask
-you added is installed by the same command. That step only ever installs and
-upgrades - it never uninstalls, so anything you installed with `brew` by hand
-stays where it is.
+you added is installed by the same command. That step only ever installs what is
+missing - it never uninstalls, so anything you installed with `brew` by hand
+stays where it is, and it never upgrades, so anything already installed stays at
+the version it is on.
 
-The Homebrew step runs on every rebuild, not only when the lists change, and it
-lets Homebrew update itself first. A rebuild is therefore not instant and does
-need the network.
+The Homebrew step runs on every rebuild, not only when the lists change. When
+everything on the lists is already installed it has nothing to do, but it still
+has to ask Homebrew, so a rebuild does need the network.
 
 ---
 
@@ -291,9 +292,17 @@ nix build .#default       # does it still build?
 ```
 
 This pins only the Nix half. Homebrew's formulae and casks are not pinned by
-anything here - `brew bundle install` upgrades them as Homebrew sees fit, on
-every rebuild. That is the cost of having them come from Homebrew, and it is
-why the tools worth keeping reproducible are on the Nix side.
+anything here: a rebuild installs whichever version Homebrew is offering at the
+time and then leaves it alone, so what you end up with depends on when you first
+installed it. Upgrading them is a separate, deliberate act:
+
+```sh
+brew upgrade <formula>
+brew upgrade --cask <cask>
+```
+
+That is the cost of having them come from Homebrew, and it is why the tools
+worth keeping reproducible are on the Nix side.
 
 Commit the resulting `flake.lock` from a machine you are willing to commit from.
 

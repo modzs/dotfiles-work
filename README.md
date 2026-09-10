@@ -36,19 +36,26 @@ rather than claiming a containment that no longer holds.
 | --- | --- |
 | Install command-line tools for your account from Nix, inside your home directory | Write to `/etc`, `/Library`, `/usr`, `/private`, or any macOS system domain |
 | Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself |
-| Add to what Homebrew has installed | Remove *anything* - see below |
+| Add to what Homebrew has installed | Uninstall *anything* - see below |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
 | Ask for your password **once**, to install Nix | Ask for your password ever again |
 
 Three of those deserve to be spelled out.
 
-**It never removes anything.** Homebrew's "bundle" mechanism can be run in a
+**It never uninstalls anything.** Homebrew's "bundle" mechanism can be run in a
 mode that uninstalls whatever is not on the list. This configuration does not
 run it that way and has no option to. Software installed on this Mac by anyone,
-for any reason - a security agent, a VPN client, a managed application - is not
-touched, not now and not on any future rebuild. The test suite runs the step
-against a stand-in for `brew` and fails if it ever passes a flag that could
-uninstall.
+for any reason - a security agent, a VPN client, a managed application - is
+never uninstalled, not now and not on any future rebuild. The test suite runs
+the step against a stand-in for `brew` and fails if it ever passes a flag that
+could uninstall.
+
+There is one thing it *will* replace, and it is worth being exact about. The
+step passes `--force`, so a cask is allowed to claim an application already
+sitting at the path it installs to. That means an app whose name is on the cask
+list in `home.nix` - today WezTerm, Ghostty and Claude Code - is replaced by
+Homebrew's copy if it is already in `/Applications`, however it got there.
+Nothing whose name is not on that list is touched at all.
 
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns
@@ -123,9 +130,10 @@ version. What the Homebrew half buys is that its applications land in
 Services find them.
 
 Nothing updates on its own. This is meant to be installed once and left alone,
-and an update is something you do deliberately - though note that a rebuild does
-let Homebrew update itself and its formula list, which is how Homebrew normally
-behaves.
+and an update is something you do deliberately. That holds for both halves: a
+rebuild installs whatever on the Homebrew list is missing and leaves what is
+already installed at the version it is, so upgrading a formula or a cask stays
+something you ask for with `brew`.
 
 ## Prerequisites
 

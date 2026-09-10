@@ -3,7 +3,7 @@
 #
 # No sudo, and nothing here can ask for a privilege it does not have. What this
 # writes is your home directory, plus - through a Homebrew you installed
-# yourself - the formulae and casks home.nix lists. It never removes either.
+# yourself - the formulae and casks home.nix lists. It never uninstalls either.
 # See README.md for exactly where that line falls and AGENTS.md for why.
 set -euo pipefail
 

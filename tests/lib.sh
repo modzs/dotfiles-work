@@ -186,10 +186,22 @@ dotfiles_tracked_except() {
     | tr '\n' '\0')
 }
 
-# The path of the calling test file, relative to the repository root.
+# The path of the calling test file, relative to the repository root - the form
+# `git ls-files` prints, because that is what dotfiles_tracked_except matches it
+# against.
+#
+# Resolved to an absolute path first. $BASH_SOURCE is whatever the caller was
+# invoked as, so running a suite directly - `./tests/safety.test.sh`, the form
+# HOW-TO.md documents - makes it "./tests/safety.test.sh", which no $ROOT prefix
+# strips and which matches nothing in the index. The file then failed to exclude
+# itself and reported its own forbidden strings as a defect in the repository.
+# tests/run.sh passes an absolute path and so never saw it, which is exactly the
+# kind of gap the count in dotfiles_test_expect exists to make loud.
 dotfiles_test_self() {
-  local self=${BASH_SOURCE[1]}
-  printf '%s\n' "${self#"$ROOT"/}"
+  local self=${BASH_SOURCE[1]} dir base
+  dir=$(cd "$(dirname "$self")" && pwd) || fail "could not resolve the calling test file"
+  base=$(basename "$self")
+  printf '%s\n' "${dir#"$ROOT"/}/$base"
 }
 
 # Evaluate a nix expression against the flake at $ROOT, with proper error handling.

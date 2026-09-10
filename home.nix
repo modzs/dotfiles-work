@@ -39,9 +39,11 @@ let
     # it is a symlink into the Nix store and every rebuild replaces it. Change
     # the `brews` and `casks` lists in home.nix instead.
     #
-    # Applying this file only installs and upgrades what it lists. Nothing here
-    # uninstalls anything, so software installed by hand for unrelated reasons
-    # is left exactly as it is.
+    # Applying this file installs what it lists and leaves what is already
+    # installed alone. Nothing here uninstalls anything, so software installed
+    # by hand for unrelated reasons is left exactly as it is - with one
+    # exception worth knowing: an application already sitting where a cask on
+    # this list wants to be is replaced by that cask.
     ${lib.concatMapStringsSep "\n" (b: ''brew "${b}"'') brews}
     ${lib.concatMapStringsSep "\n" (c: ''cask "${c}"'') casks}
   '';
@@ -73,6 +75,15 @@ let
     # usable Homebrew, and saying so is better than quietly using a different
     # one. Otherwise the two prefixes macOS Homebrew supports are tried, Apple
     # silicon first.
+    #
+    # That first branch is also the only lever that makes the missing-Homebrew
+    # failure path above reachable in a test on a machine that *has* Homebrew,
+    # which is every CI runner - macos-latest ships it preinstalled.
+    # tests/homebrew.test.sh:test_a_missing_homebrew_fails_with_an_explanation
+    # points HOMEBREW_PREFIX at an empty directory for exactly that purpose. It
+    # has been proposed as a redundant second acceptance path and kept
+    # deliberately: dropping it would trade a working guarantee for a tidier
+    # line.
     brew=""
     if [ -n "''${HOMEBREW_PREFIX:-}" ]; then
       # Quoted, not word-split: this one comes from the environment.
@@ -119,16 +130,25 @@ let
     # declarative cleanup would uninstall everything they installed for reasons
     # this repository knows nothing about.
     #
-    # --force is `brew install --force/--overwrite`, which lets a cask claim an
-    # app that is already sitting in /Applications instead of failing on it. It
-    # does not remove or prune anything.
+    # --no-upgrade is nix-darwin's `homebrew.onActivation.upgrade = false`,
+    # which is the default the personal configuration this mirrors leaves in
+    # place: a rebuild installs what is missing and does not touch a formula or
+    # cask that is already there. Upgrading stays something the user asks for
+    # with `brew` when they mean it, rather than something a rebuild does to
+    # five packages behind their back.
     #
-    # HOMEBREW_NO_AUTO_UPDATE is unset rather than set to 0, because Homebrew
-    # reads it as a flag: any value at all, "0" included, turns auto-update
-    # off. Unsetting it is what leaves auto-update on.
-    unset HOMEBREW_NO_AUTO_UPDATE
+    # --force is `brew install --force/--overwrite`, which lets a cask claim an
+    # app that is already sitting in /Applications instead of failing on it -
+    # so an app whose name is on the cask list above is replaced by that cask.
+    # It does not remove or prune anything else.
+    #
+    # HOMEBREW_NO_AUTO_UPDATE is deliberately not touched, in either direction.
+    # nix-darwin's `autoUpdate = true` only declines to *set* the variable; it
+    # never clears one the user exported, and clearing it here would silently
+    # reverse a deliberate choice - a slow or proxied network is exactly why
+    # someone sets it.
 
-    exec "$brew" bundle install --file "$brewfile" --force
+    exec "$brew" bundle install --file "$brewfile" --no-upgrade --force
   '';
 in
 
@@ -187,9 +207,16 @@ in
   #
   # `brew bundle install` runs on every switch, so editing the lists above and
   # running ./rebuild.sh is all there is to it - the same loop as home.packages.
-  # It is the last thing activation does: writeBoundary is the point at which
-  # Home Manager has finished writing the home directory, which is where the
-  # Brewfile the script reads comes from.
+  # It is the last thing activation does, and all three edges below are load
+  # bearing. `writeBoundary` is only a barrier - it writes nothing - so an
+  # entry naming it alone is free to be ordered before `linkGeneration`, and
+  # `linkGeneration` is the step that puts the Brewfile this script reads into
+  # the home directory. Home Manager breaks an unconstrained tie by attribute
+  # name, and `homebrewBundle` sorts first, so without that edge the step reads
+  # the previous generation's Brewfile - or none at all on a first switch.
+  # `installPackages` is not needed for correctness; it is what makes true the
+  # promise README.md, HOW-TO.md and bootstrap.sh all make, that when Homebrew
+  # is missing everything Nix installs has already been applied.
   #
   # This is where this repository stops being contained by the home directory.
   # Homebrew installs into /opt/homebrew and casks into /Applications, and this
@@ -205,7 +232,8 @@ in
   # work in it - which is what the missing-Homebrew message tells the user, so
   # it had better be true.
   home.activation.homebrewBundle = lib.mkIf (brews != [ ] || casks != [ ])
-    (lib.hm.dag.entryAfter [ "writeBoundary" ] "run ${brewBundle}");
+    (lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" ]
+      "run ${brewBundle}");
 
   home.sessionVariables.EDITOR = "nvim";
   home.sessionVariables.NPM_CONFIG_PREFIX = npmPrefix;

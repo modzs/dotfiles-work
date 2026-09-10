@@ -292,6 +292,17 @@ test_nothing_here_installs_homebrew() {
   # Tokenized rather than grepped, for the same reason the sudo check above is:
   # these scripts have to be free to *explain* Homebrew in a comment, and a
   # word in a comment is not a command.
+  #
+  # This does read implementation source, and that has been raised and settled.
+  # It is not the anti-pattern the rest of this suite avoids, and the line
+  # between them is what the source is being asked to stand for. A test that
+  # greps README.md or HOW-TO.md would be using text as a proxy for behaviour -
+  # prose is not a contract, and pinning its wording proves nothing about
+  # whether it is true. This file enforces a design rule about what this
+  # repository's own code may *contain*, so here the source is the contract
+  # itself, not evidence about something else. That is why the pre-existing
+  # sudo check above already works this way, and why both go through a real
+  # shell tokenizer instead of a grep.
   script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-brewscan.XXXXXX") \
     || fail "could not create a temp file for the tokenizer"
   cat >"$script" <<'SCAN'
