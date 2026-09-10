@@ -15,8 +15,10 @@
 #   with `cleanup = "zap"`, which uninstalls whatever the Brewfile does not
 #   list. Software installed by hand for unrelated reasons - an employer's
 #   security agent included - must survive every rebuild;
-# - the step runs after the Brewfile has been written, or it applies the last
-#   rebuild's package list instead of this one's;
+# - the step runs last. Before the Brewfile is written it applies the previous
+#   rebuild's package list; before the on-change hooks it can strand the font
+#   install permanently, because this is the one step that fails on a normal
+#   machine;
 # - a Mac without Homebrew gets an explanation, not `brew: command not found`;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
@@ -126,8 +128,14 @@ test_brewfile_lists_exactly_the_declared_formulae_and_casks() {
 #
 # The home directory is a temp root carrying a real copy of the generated
 # Brewfile, because the step refuses to run without one.
+#
+# Takes the HOMEBREW_NO_AUTO_UPDATE to hand the step, or nothing at all to hand
+# it an environment where the variable is absent. Which of the two a caller
+# picks decides what the recording can prove: handing in a value can only show
+# whether the step cleared it, and only an absent variable can show whether the
+# step set one of its own.
 dotfiles_run_brew_step() {
-  local root generation script status=0
+  local no_auto_update=${1-} root generation script status=0
   generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
   script=$(dotfiles_brew_bundle_script "$generation") \
@@ -154,12 +162,20 @@ STANDIN
   # shell running the suite happened to export. PATH is deliberately useless:
   # Home Manager's activation replaces PATH before running this, and the step
   # has to find Homebrew without it.
-  env -i \
-    HOME="$root/home" \
-    PATH=/usr/bin:/bin \
-    HOMEBREW_PREFIX="$root/prefix" \
-    HOMEBREW_NO_AUTO_UPDATE=1 \
-    "$script" 2>&1 || status=$?
+  if [ "$#" -eq 0 ]; then
+    env -i \
+      HOME="$root/home" \
+      PATH=/usr/bin:/bin \
+      HOMEBREW_PREFIX="$root/prefix" \
+      "$script" 2>&1 || status=$?
+  else
+    env -i \
+      HOME="$root/home" \
+      PATH=/usr/bin:/bin \
+      HOMEBREW_PREFIX="$root/prefix" \
+      HOMEBREW_NO_AUTO_UPDATE="$no_auto_update" \
+      "$script" 2>&1 || status=$?
+  fi
 
   [ "$status" = 0 ] || fail "the Homebrew step failed against a stand-in brew (exit $status)"
 }
@@ -183,17 +199,24 @@ test_the_homebrew_step_installs_and_cannot_remove() {
   # is `install`, asserted above; these are the flags that would turn even that
   # into a removal, plus `--global`, which is the mode that lets
   # $HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP switch cleanup on from the
-  # environment rather than from this repository. `--upgrade` is in the list
-  # for a different reason: it does not remove anything, but it would make a
-  # rebuild replace versions of already-installed packages that the user never
-  # asked it to touch.
-  for word in cleanup --cleanup --force-cleanup --zap -g --global uninstall remove --upgrade; do
+  # environment rather than from this repository.
+  for word in cleanup --cleanup --force-cleanup --zap -g --global uninstall remove; do
     case " $argv " in
       *" $word "*) fail "the Homebrew step passes $word, which can uninstall software the user installed by hand" ;;
     esac
   done
 
-  pass "homebrew: the step runs \`brew bundle install\` and passes nothing that can uninstall"
+  # Separate, because it is a different defect with a different diagnosis.
+  # `--upgrade` removes nothing; it would make a rebuild replace the versions
+  # of already-installed formulae and casks, which the reference configuration
+  # does not do - nix-darwin's `onActivation.upgrade` defaults to false. The
+  # `--no-upgrade` the step really passes does not trip this: the guard
+  # compares whole space-delimited words.
+  case " $argv " in
+    *" --upgrade "*) fail "the Homebrew step passes --upgrade, so a rebuild replaces versions of already-installed packages the user never asked it to touch" ;;
+  esac
+
+  pass "homebrew: the step runs \`brew bundle install\` and passes nothing that can uninstall or upgrade"
 }
 
 test_the_homebrew_step_does_not_touch_auto_update() {
@@ -209,14 +232,25 @@ test_the_homebrew_step_does_not_touch_auto_update() {
   # one the user exported - which someone on a slow or proxied network has
   # every reason to have done.
   #
-  # The stand-in is handed HOMEBREW_NO_AUTO_UPDATE=1 through `env -i`, so
-  # seeing 1 come back out proves both halves at once: the step did not set the
-  # variable itself, and it did not unset the value it was given.
+  # Two runs, because one cannot see both failures. Starting from an
+  # environment where the variable is absent is the only way to catch the step
+  # setting one of its own - `export HOMEBREW_NO_AUTO_UPDATE=1`, which is
+  # nix-darwin's spelling of `autoUpdate = false` and so the likeliest
+  # regression here. A run that is handed a value cannot: the value would come
+  # back either way.
   recording=$(dotfiles_run_brew_step) \
     || fail "could not run the Homebrew step against a stand-in brew"
 
+  assert_contains "$recording" "HOMEBREW_NO_AUTO_UPDATE: <unset>" \
+    "the Homebrew step sets HOMEBREW_NO_AUTO_UPDATE itself, which turns auto-update off"
+
+  # And starting from a value the caller exported is the only way to catch the
+  # step clearing it, which is what this configuration used to do.
+  recording=$(dotfiles_run_brew_step 1) \
+    || fail "could not run the Homebrew step against a stand-in brew"
+
   assert_contains "$recording" "HOMEBREW_NO_AUTO_UPDATE: 1" \
-    "the Homebrew step changed HOMEBREW_NO_AUTO_UPDATE instead of leaving the user's value alone"
+    "the Homebrew step cleared HOMEBREW_NO_AUTO_UPDATE instead of leaving the user's value alone"
 
   pass "homebrew: the step neither sets nor clears HOMEBREW_NO_AUTO_UPDATE"
 }
@@ -234,7 +268,7 @@ dotfiles_activation_line() {
 }
 
 test_the_homebrew_step_runs_after_the_brewfile_is_written() {
-  local generation bundle link install
+  local generation bundle link install onchange
   if ! command -v nix >/dev/null 2>&1; then
     skip "activation ordering check (nix not found)"
     return 0
@@ -245,22 +279,24 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
   # - and not implementation source. The order is not visible in home.nix at
   # all: `writeBoundary` is a barrier that writes nothing, so an entry naming
   # only it is ordered against its siblings by attribute name, and
-  # `homebrewBundle` sorts ahead of both steps below. That is a real defect
-  # rather than a stylistic one - the step reads a Brewfile `linkGeneration`
-  # writes, so running first means reading the previous generation's package
-  # list, or failing outright on a first switch - and nothing else in this
+  # `homebrewBundle` sorts ahead of all three steps below. Nothing else in this
   # suite can see it, because the other checks run the step directly against a
   # Brewfile they placed themselves.
+  #
+  # Each edge is asserted separately, because each one fails differently and
+  # the failure messages are the only place that difference is written down.
   generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
 
   bundle=$(dotfiles_activation_line "$generation" homebrewBundle)
   link=$(dotfiles_activation_line "$generation" linkGeneration)
   install=$(dotfiles_activation_line "$generation" installPackages)
+  onchange=$(dotfiles_activation_line "$generation" onFilesChange)
 
   [ -n "$bundle" ] || fail "the activation script never activates homebrewBundle"
   [ -n "$link" ] || fail "the activation script never activates linkGeneration"
   [ -n "$install" ] || fail "the activation script never activates installPackages"
+  [ -n "$onchange" ] || fail "the activation script never activates onFilesChange"
 
   # linkGeneration writes ~/.config/dotfiles/Brewfile. Reading it before then
   # is the difference between applying the list in home.nix and applying the
@@ -275,7 +311,19 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
   [ "$bundle" -gt "$install" ] \
     || fail "the Homebrew step runs before installPackages, so its failure would leave the Nix half unapplied"
 
-  pass "homebrew: the step activates after the Brewfile is written and the Nix packages are installed"
+  # This is the edge whose absence does permanent damage, and the reason is not
+  # visible from the edge itself. onFilesChange holds the rsync that installs
+  # the font into ~/Library/Fonts, and it is guarded by a marker file that
+  # linkGeneration has already placed in $HOME by the time the Homebrew step
+  # runs. A Mac with no Homebrew therefore aborts activation in between: the
+  # marker is in place, the font was never copied, and the next rebuild
+  # compares the marker against the store, sees no change, and skips the rsync
+  # again. The font never installs and never self-heals, so the prompt renders
+  # tofu until the font derivation itself changes.
+  [ "$bundle" -gt "$onchange" ] \
+    || fail "the Homebrew step runs before onFilesChange, so a failure strands the font rsync behind a marker that is already in place"
+
+  pass "homebrew: the step activates last, after the Brewfile, the Nix packages and the on-change hooks"
 }
 
 # --- a Mac without Homebrew is told so ----------------------------------------

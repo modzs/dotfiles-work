@@ -87,9 +87,13 @@ missing - it never uninstalls, so anything you installed with `brew` by hand
 stays where it is, and it never upgrades, so anything already installed stays at
 the version it is on.
 
-The Homebrew step runs on every rebuild, not only when the lists change. When
-everything on the lists is already installed it has nothing to do, but it still
-has to ask Homebrew, so a rebuild does need the network.
+The Homebrew step runs on every rebuild, not only when the lists change, so a
+rebuild does need the network. Even when everything on the lists is already
+installed it still asks Homebrew, and asking is not free: unless you have
+exported `HOMEBREW_NO_AUTO_UPDATE` yourself, Homebrew may update its own
+checkout and taps before answering, the same as it would on any `brew install`.
+This repo neither sets that variable nor clears it, and it never runs
+`brew update` itself.
 
 ---
 

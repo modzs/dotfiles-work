@@ -207,16 +207,25 @@ in
   #
   # `brew bundle install` runs on every switch, so editing the lists above and
   # running ./rebuild.sh is all there is to it - the same loop as home.packages.
-  # It is the last thing activation does, and all three edges below are load
-  # bearing. `writeBoundary` is only a barrier - it writes nothing - so an
-  # entry naming it alone is free to be ordered before `linkGeneration`, and
-  # `linkGeneration` is the step that puts the Brewfile this script reads into
-  # the home directory. Home Manager breaks an unconstrained tie by attribute
-  # name, and `homebrewBundle` sorts first, so without that edge the step reads
-  # the previous generation's Brewfile - or none at all on a first switch.
-  # `installPackages` is not needed for correctness; it is what makes true the
-  # promise README.md, HOW-TO.md and bootstrap.sh all make, that when Homebrew
-  # is missing everything Nix installs has already been applied.
+  # It is the last thing activation does, and every edge below is load bearing.
+  # `writeBoundary` is only a barrier - it writes nothing - so an entry naming
+  # it alone is free to be ordered before `linkGeneration`, and `linkGeneration`
+  # is the step that puts the Brewfile this script reads into the home
+  # directory. Home Manager breaks an unconstrained tie by attribute name, and
+  # `homebrewBundle` sorts first, so without that edge the step reads the
+  # previous generation's Brewfile - or none at all on a first switch.
+  #
+  # The other two edges are there because this step can fail on a machine that
+  # has no Homebrew, activation runs under `set -eu`, and a failure here must
+  # not take anything else down with it. `installPackages` is what makes true
+  # the promise README.md, HOW-TO.md and bootstrap.sh all make, that when
+  # Homebrew is missing everything Nix installs has already been applied.
+  # `onFilesChange` is the one that would not self-heal: it holds the font
+  # rsync into ~/Library/Fonts, guarded by a marker file that `linkGeneration`
+  # has already placed in $HOME by the time this runs. Fail in between and the
+  # next rebuild finds the marker matching, decides nothing changed, and skips
+  # the rsync forever - so the font is never installed and the prompt renders
+  # tofu until the font derivation itself changes.
   #
   # This is where this repository stops being contained by the home directory.
   # Homebrew installs into /opt/homebrew and casks into /Applications, and this
@@ -232,7 +241,7 @@ in
   # work in it - which is what the missing-Homebrew message tells the user, so
   # it had better be true.
   home.activation.homebrewBundle = lib.mkIf (brews != [ ] || casks != [ ])
-    (lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" ]
+    (lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" ]
       "run ${brewBundle}");
 
   home.sessionVariables.EDITOR = "nvim";

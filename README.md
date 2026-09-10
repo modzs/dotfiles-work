@@ -35,7 +35,7 @@ rather than claiming a containment that no longer holds.
 | This configuration does | This configuration does not |
 | --- | --- |
 | Install command-line tools for your account from Nix, inside your home directory | Write to `/etc`, `/Library`, `/usr`, `/private`, or any macOS system domain |
-| Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself |
+| Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself - though Homebrew may still auto-update itself when asked to install, see below |
 | Add to what Homebrew has installed | Uninstall *anything* - see below |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
 | Ask for your password **once**, to install Nix | Ask for your password ever again |
@@ -60,7 +60,16 @@ Nothing whose name is not on that list is touched at all.
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns
 the machine. If Homebrew is absent, this configuration stops with an explanation
-and changes nothing.
+at its last step. Everything Nix installs is already in place by then - your
+shell, your editor, your git config - and only the formulae and casks are
+missing. Nothing outside your home directory was touched.
+
+It does not run `brew update` either. But it does not stop Homebrew from
+updating itself: unless you have exported `HOMEBREW_NO_AUTO_UPDATE` yourself,
+`brew bundle install` can trigger Homebrew's own auto-update, which fetches and
+resets Homebrew's checkout and its taps inside the Homebrew prefix. That is
+Homebrew behaving the way it normally does on any `brew install`, and this
+configuration deliberately leaves the choice where it found it.
 
 **Everything else really is confined.** This is a
 [standalone Home Manager](https://nix-community.github.io/home-manager/)
@@ -129,11 +138,17 @@ version. What the Homebrew half buys is that its applications land in
 `/Applications` like any other Mac application, where Spotlight and Launch
 Services find them.
 
-Nothing updates on its own. This is meant to be installed once and left alone,
-and an update is something you do deliberately. That holds for both halves: a
-rebuild installs whatever on the Homebrew list is missing and leaves what is
-already installed at the version it is, so upgrading a formula or a cask stays
-something you ask for with `brew`.
+None of your packages update on their own. This is meant to be installed once
+and left alone, and an update is something you do deliberately. That holds for
+both halves: a rebuild installs whatever on the Homebrew list is missing and
+leaves what is already installed at the version it is, so upgrading a formula
+or a cask stays something you ask for with `brew`.
+
+Homebrew itself is the exception, and it is not this repo's doing. A rebuild
+asks Homebrew to install, and unless you have exported `HOMEBREW_NO_AUTO_UPDATE`
+Homebrew may update its own checkout and taps first, exactly as it would if you
+had typed `brew install`. This configuration neither turns that on nor off - it
+leaves the variable exactly as it finds it.
 
 ## Prerequisites
 
