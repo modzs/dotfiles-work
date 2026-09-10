@@ -21,8 +21,10 @@
 #
 # Must stay bash 3.2 compatible - macOS ships no newer bash. See AGENTS.md.
 
-# Print the locations this machine would look in, space separated. Split out so
-# the failure message names the place it actually looked rather than a guess.
+# Describe, for a human, where this machine would look. For the failure message
+# only - it is prose, not a list anything iterates over. It used to be both, and
+# a caller splitting it on whitespace is what made a `HOMEBREW_PREFIX` with a
+# space in it come out as two paths that do not exist.
 dotfiles_homebrew_searched() {
   local searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
   if [ -n "${HOMEBREW_PREFIX:-}" ]; then
@@ -34,9 +36,24 @@ dotfiles_homebrew_searched() {
 # Print the path of the Homebrew this machine would use, or nothing at all.
 # Returns 0 either way: "absent" is an answer, not an error, and the caller
 # decides what it means.
+#
+# The branch structure mirrors home.nix's activation step deliberately, down to
+# the quoting. A prefix from the environment is one path and is checked as one
+# path; only the two literal candidates are a list to iterate. Deriving both
+# from a single space-separated string is what let the two disagree, so neither
+# of them does that any more.
 dotfiles_homebrew_find() {
-  local candidate
-  for candidate in $(dotfiles_homebrew_searched); do
+  local candidate found=""
+
+  if [ -n "${HOMEBREW_PREFIX:-}" ]; then
+    found="$HOMEBREW_PREFIX/bin/brew"
+    if [ -x "$found" ]; then
+      printf '%s\n' "$found"
+    fi
+    return 0
+  fi
+
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
     if [ -x "$candidate" ]; then
       printf '%s\n' "$candidate"
       return 0

@@ -47,7 +47,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 11
+dotfiles_test_expect 12
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -479,6 +479,108 @@ test_the_preflight_accepts_a_mac_with_homebrew() {
   pass "preflight: a Mac with Homebrew passes, and the brew is located not run"
 }
 
+# --- the two implementations of "where is brew" agree -------------------------
+
+# Ask lib/homebrew-present.sh whether a usable Homebrew exists, given a
+# HOMEBREW_PREFIX. Prints "found" or "absent".
+dotfiles_preflight_verdict() {
+  local prefix=$1 answer
+  answer=$(HOMEBREW_PREFIX="$prefix" /bin/bash -c \
+    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_find' _ "$ROOT") \
+    || fail "the preflight library failed outright for prefix $prefix"
+  if [ -n "$answer" ]; then printf 'found\n'; else printf 'absent\n'; fi
+}
+
+# Ask the BUILT activation step the same question, by running it. It finds a
+# brew and execs it, or explains and exits non-zero - so its exit status is its
+# verdict. The brew it may exec is the stand-in this creates, never a real one.
+dotfiles_step_verdict() {
+  local prefix=$1 generation script root status=0
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  script=$(dotfiles_brew_bundle_script "$generation") \
+    || fail "the activation script does not run a Homebrew step at all"
+
+  root=$(dotfiles_test_tmproot dotfiles-agree-home)
+  mkdir -p "$root/home/$(dirname "$BREWFILE_TARGET")"
+  cp "$generation/home-files/$BREWFILE_TARGET" "$root/home/$BREWFILE_TARGET"
+
+  env -i \
+    HOME="$root/home" \
+    PATH=/usr/bin:/bin \
+    HOMEBREW_PREFIX="$prefix" \
+    "$script" >/dev/null 2>&1 || status=$?
+
+  if [ "$status" = 0 ]; then printf 'found\n'; else printf 'absent\n'; fi
+}
+
+test_the_preflight_and_the_step_agree_on_where_brew_is() {
+  local root prefix preflight step
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "preflight/step agreement check (nix not found)"
+    return 0
+  fi
+
+  # bootstrap.sh answers "is there a Homebrew" up front and the activation step
+  # answers it again at the end of a switch. Two implementations of one rule,
+  # held together until now by a comment telling the next person to change both.
+  # That is what failed: the library fed a space-separated string to an
+  # unquoted `for`, so a HOMEBREW_PREFIX containing a space split into two paths
+  # that do not exist. bootstrap refused a Mac where the rebuild would have
+  # found Homebrew, and the refusal named the path it was sitting at.
+  #
+  # So the agreement is asserted by running both, not by comparing their text.
+  # Each scenario sets up a prefix and asks each side for a verdict; the verdicts
+  # have to match, whatever they are.
+  #
+  # One case is deliberately absent: HOMEBREW_PREFIX unset, which sends both
+  # sides to /opt/homebrew and /usr/local. Those are absolute and cannot be
+  # redirected, so exercising the step that way on a machine that has Homebrew -
+  # every developer machine, every CI runner - would exec the real brew and run
+  # a real `bundle install`. That is not a gap worth a real install to close.
+  root=$(dotfiles_test_tmproot dotfiles-agreement)
+
+  # A prefix holding a usable brew. The stand-in exits 0, which is what makes
+  # running the step safe here.
+  prefix="$root/present"
+  mkdir -p "$prefix/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$prefix/bin/brew"
+  chmod +x "$prefix/bin/brew"
+  preflight=$(dotfiles_preflight_verdict "$prefix")
+  step=$(dotfiles_step_verdict "$prefix")
+  assert_eq "$preflight" "found" "the preflight did not find a brew at a prefix that has one"
+  assert_eq "$step" "$preflight" \
+    "the step and the preflight disagree about a prefix holding a usable brew"
+
+  # A prefix with nothing in it. Both must treat the variable as authoritative
+  # and answer "absent" rather than falling back to the standard locations -
+  # which this machine has, so a fallback would show up here as "found".
+  prefix="$root/empty"
+  mkdir -p "$prefix"
+  preflight=$(dotfiles_preflight_verdict "$prefix")
+  step=$(dotfiles_step_verdict "$prefix")
+  assert_eq "$preflight" "absent" \
+    "the preflight fell back to a standard location instead of trusting HOMEBREW_PREFIX"
+  assert_eq "$step" "$preflight" \
+    "the step and the preflight disagree about an empty HOMEBREW_PREFIX"
+
+  # The case that broke: a prefix with a space in it. macOS allows one, and a
+  # Mac someone else administers is exactly where a non-standard prefix turns
+  # up.
+  prefix="$root/my brew"
+  mkdir -p "$prefix/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$prefix/bin/brew"
+  chmod +x "$prefix/bin/brew"
+  preflight=$(dotfiles_preflight_verdict "$prefix")
+  step=$(dotfiles_step_verdict "$prefix")
+  assert_eq "$preflight" "found" \
+    "the preflight lost a brew to word splitting on a HOMEBREW_PREFIX containing a space"
+  assert_eq "$step" "$preflight" \
+    "the step and the preflight disagree about a HOMEBREW_PREFIX containing a space"
+
+  pass "homebrew: the bootstrap preflight and the activation step reach the same verdict"
+}
+
 # --- a Mac without Homebrew is told so ----------------------------------------
 
 test_a_missing_homebrew_fails_with_an_explanation() {
@@ -664,6 +766,7 @@ test_the_homebrew_step_neutralizes_the_cleanup_variables
 test_the_homebrew_step_runs_after_the_brewfile_is_written
 test_the_preflight_refuses_a_mac_without_homebrew
 test_the_preflight_accepts_a_mac_with_homebrew
+test_the_preflight_and_the_step_agree_on_where_brew_is
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
 test_the_duplicate_guard_catches_a_differently_spelled_collision
