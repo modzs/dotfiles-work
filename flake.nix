@@ -37,15 +37,7 @@
 
       mkHome = system:
         home-manager.lib.homeManagerConfiguration {
-          pkgs = import nixpkgs {
-            inherit system;
-            # No package below is unfree today - claude-code, which was, comes
-            # from Homebrew now. Kept anyway, because it is a standing answer
-            # to a question this configuration will be asked again the next
-            # time a tool worth having turns out to be unfree, and because
-            # discovering the need in the middle of a rebuild is worse.
-            config.allowUnfree = true;
-          };
+          pkgs = import nixpkgs { inherit system; };
           extraSpecialArgs = { inherit user homeDirectory; };
           modules = [ ./home.nix ];
         };

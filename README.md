@@ -164,10 +164,11 @@ leaves the variable exactly as it finds it.
 - The ability to install Nix, which needs your password once. If your employer's
   policy does not allow that, this repo cannot be used.
 - **Homebrew**, installed by you before you run `./bootstrap.sh`. This repo
-  never installs it; see [HOW-TO.md](HOW-TO.md). If you cannot or would rather
-  not have Homebrew, empty the `brews` and `casks` lists in `home.nix`: the
-  Homebrew step then drops out of the rebuild entirely and the rest works
-  unchanged, inside your home directory as before.
+  requires it and never installs it; see [HOW-TO.md](HOW-TO.md). There is no way
+  to turn the Homebrew half off: emptying the `brews` and `casks` lists in
+  `home.nix` leaves the step with nothing to install, but the step still runs
+  and still needs a `brew` to talk to. If you cannot have Homebrew on this Mac,
+  this repo is not usable as it stands.
 
 ## Setup
 

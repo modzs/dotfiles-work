@@ -116,10 +116,10 @@ let
     directory, so running it is your decision to make, not this repository's -
     and on a Mac you do not administer it may not be yours to make at all.
 
-    Install it yourself from https://brew.sh and run ./rebuild.sh again. If you
-    would rather not have Homebrew, empty the `brews` and `casks` lists in
-    home.nix: this step then drops out of the rebuild entirely and everything
-    else works unchanged.
+    Install it yourself from https://brew.sh and run ./rebuild.sh again. This
+    configuration requires it: emptying the `brews` and `casks` lists in
+    home.nix does not turn this step off, it only leaves it with nothing to
+    install.
     MISSING
       exit 1
     fi
@@ -272,15 +272,12 @@ in
   # still holds.
   home.file."${brewfileTarget}".text = brewfile;
 
-  # Guarded, so that emptying both lists is a real way to opt out and not just a
-  # way to ask Homebrew for nothing. With no formulae and no casks there is
-  # nothing outside the home directory left to do, and a Mac where Homebrew
-  # cannot be installed at all should not fail its rebuild over a step with no
-  # work in it - which is what the missing-Homebrew message tells the user, so
-  # it had better be true.
-  home.activation.homebrewBundle = lib.mkIf (brews != [ ] || casks != [ ])
-    (lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" ]
-      "run ${brewBundle}");
+  # Unconditional. This configuration requires Homebrew, and emptying the lists
+  # above is not a way to opt out of it: the step still runs, still needs a
+  # `brew` to talk to, and asks it to install nothing.
+  home.activation.homebrewBundle =
+    lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" ]
+      "run ${brewBundle}";
 
   home.sessionVariables.EDITOR = "nvim";
   home.sessionVariables.NPM_CONFIG_PREFIX = npmPrefix;

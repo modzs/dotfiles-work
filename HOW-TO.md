@@ -166,18 +166,19 @@ brew uninstall <formula>
 brew uninstall --cask <cask>
 ```
 
-### Turn the Homebrew part off
+### There is no way to turn the Homebrew part off
 
-Empty both lists:
+This configuration requires Homebrew. Emptying both lists:
 
 ```nix
   brews = [ ];
   casks = [ ];
 ```
 
-With both lists empty the Homebrew step is not part of the rebuild at all, so
-Homebrew does not have to be installed and its absence is not an error. Nothing
-already installed is removed - emptying the lists never uninstalls anything.
+does not remove the step from the rebuild. It still runs, still needs a `brew`
+to talk to, and asks it to install nothing - so on a Mac without Homebrew the
+rebuild still stops with the message below. Nothing already installed is
+removed either; emptying the lists never uninstalls anything.
 
 ---
 
@@ -346,10 +347,10 @@ for what to do about that on a Mac you do not administer.
 **`dotfiles-work: no Homebrew at ...`** - the rebuild got all the way to its
 last step and found no `brew` to talk to. Everything Nix installs is already in
 place; only the formulae and casks are missing. Install Homebrew from
-[brew.sh](https://brew.sh) and run `./rebuild.sh` again, or empty the `brews`
-and `casks` lists in `home.nix` if you would rather not have it. If Homebrew
-*is* installed, check `HOMEBREW_PREFIX`: the step trusts that variable when the
-environment sets it, and a stale value points it at the wrong place.
+[brew.sh](https://brew.sh) and run `./rebuild.sh` again - this configuration
+requires it, and emptying the lists in `home.nix` is not a way around it. If
+Homebrew *is* installed, check `HOMEBREW_PREFIX`: the step trusts that variable
+when the environment sets it, and a stale value points it at the wrong place.
 
 **A rebuild succeeds but `gh` or `herdr` is not found** - Homebrew installed
 them, but your shell cannot see Homebrew's `bin` directory. This repo finds

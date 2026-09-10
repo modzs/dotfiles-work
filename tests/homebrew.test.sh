@@ -8,7 +8,7 @@
 # prose - README.md and AGENTS.md say what the rules are; these checks are what
 # holds the code to them.
 #
-# Six properties, in order of how much damage getting them wrong would do:
+# Five properties, in order of how much damage getting them wrong would do:
 #
 # - the step never removes anything, and cannot be talked into it. Homebrew on
 #   this machine is the user's own general-purpose package manager, and the
@@ -21,8 +21,6 @@
 #   Brewfile is written it applies the previous rebuild's package list; before
 #   the on-change hooks it can strand the font install permanently, because
 #   this is the one step that fails on an otherwise healthy machine;
-# - a failed step leaves nothing permanently broken, which is the outcome the
-#   ordering exists to protect;
 # - a Mac without Homebrew gets an explanation, not `brew: command not found`;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
@@ -30,11 +28,13 @@
 #
 # The step is exercised by running it, with a recording stand-in for `brew`.
 # Asserting on its source text would prove that the words are there; running it
-# proves what it does with them. Two checks cannot work that way: the ordering,
-# which is a property of the built activate script rather than of the step, and
-# the font outcome, which needs a whole activation. Both say so where they sit,
-# and the second one is the only place in this suite that activates anything -
-# read the comment above it before touching it.
+# proves what it does with them. One check cannot work that way: the ordering,
+# which is a property of the built activate script rather than of the step. It
+# says so where it sits.
+#
+# Nothing here activates a configuration, and nothing here may. See the standing
+# rule in AGENTS.md, and the note further down about the one outcome this file
+# deliberately leaves untested as a result.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -45,7 +45,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 9
+dotfiles_test_expect 8
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -381,138 +381,32 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
   pass "homebrew: the step activates after the Brewfile, the Nix packages and the on-change hooks"
 }
 
-# --- a failing Homebrew step leaves nothing permanently broken -----------------
+# --- what is deliberately NOT tested here --------------------------------------
 #
-# The check above pins the ORDER. This one pins the OUTCOME the order exists to
-# protect, by actually activating a configuration and looking at the result.
+# There is no test that a failed Homebrew step still leaves the font installed.
+# The check above pins the ORDER that protects that outcome; it does not pin the
+# outcome. That gap is deliberate and it should stay visible rather than be
+# papered over.
 #
-# THIS IS THE ONE PLACE IN THIS SUITE THAT ACTIVATES ANYTHING. AGENTS.md says
-# never to activate while testing, and that rule still holds everywhere else -
-# `home-manager switch`, ./rebuild.sh and ./bootstrap.sh rewrite a real home
-# directory and no test may run them. This is a deliberate, guarded exception,
-# and what makes it safe is that it does not activate THIS configuration: it
-# builds a variant whose homeDirectory is a temp directory, so every absolute
-# path baked into the activate script - the font target, the LaunchAgents
-# directory, the profile manifest - points into that temp tree instead of a
-# real home. dotfiles_activate_variant refuses to run anything until it has
-# confirmed that, by searching the built script for the real home directory and
-# finding none. Do not copy this pattern without that guard.
+# A test for the outcome would have to run a real activation, and one was
+# written and then removed. The reasons it cannot come back:
 #
-# What is being guarded, and it is not hypothetical: the font rsync in
-# onFilesChange is the only thing that installs nerd-fonts.hack, and it is
-# guarded by a marker file that linkGeneration has already written into the
-# home directory. Order the Homebrew step before onFilesChange and a Mac
-# without Homebrew aborts activation in between, under `set -eu`, with the
-# marker in place and the font never copied. Every later rebuild then compares
-# the marker against the store, concludes nothing changed, and skips the rsync
-# again. The font never lands and never self-heals; the terminal renders tofu
-# and no amount of rebuilding repairs it.
+# - a test that really activates is the one artifact in this tree capable of
+#   breaking the repository's central claim, and its safety would rest on a list
+#   of machine-global paths being complete AND STAYING complete;
+# - today's list is correct; tomorrow's is a different list. The `/bin/launchctl`
+#   path is inert only because no launchd agent is declared, and it re-arms
+#   silently the day someone adds one, with nothing failing loudly at that
+#   moment. A guard that depends on a future contributor not adding a feature is
+#   not a guard;
+# - `./tests/run.sh` is listed in HOW-TO.md under "See what would happen, without
+#   changing anything". On a Mac carrying the pre-Nix-2.14 layout, that test
+#   would have destroyed the user's Home Manager profile and every generation
+#   before any sanity check could abort - `migrateProfile` runs its `rm` against
+#   the real per-user Nix state well before the USER and HOME checks.
 #
-# Verified in both directions before this was committed: with the
-# "onFilesChange" edge present the font is there at the end, and with that edge
-# removed from home.nix the same two runs leave no HomeManager font directory
-# at all while the marker sits in place.
-
-# Build the configuration with homeDirectory pointed at $1, and print the store
-# path of the resulting generation. Fails, without having run anything, if the
-# built script still refers to the real home directory.
-dotfiles_activate_variant() {
-  local home=$1 repo=$2 built configured
-  mkdir -p "$repo"
-
-  # Tracked files only, so the variant is the committed configuration and not
-  # whatever else is lying around the working tree.
-  (cd "$ROOT" && git ls-files -z | xargs -0 tar -cf -) | (cd "$repo" && tar -xf -) \
-    || fail "could not copy the repository into the test root"
-
-  # The repo's own definition of how that line is read and rewritten, rather
-  # than a sed of this test's own devising - if it ever stops working, that is
-  # something the suite should notice here too.
-  /bin/bash -c ". \"\$1/lib/flake-settings.sh\"; flake_settings_set_home_directory \"\$2/flake.nix\" \"\$3\"" \
-    _ "$ROOT" "$repo" "$home" \
-    || fail "could not point the variant configuration at the test home"
-
-  configured=$(/bin/bash -c ". \"\$1/lib/flake-settings.sh\"; flake_settings_home_directory \"\$2/flake.nix\"" \
-    _ "$ROOT" "$repo") \
-    || fail "could not read back the variant's homeDirectory"
-
-  # The guard. This repository's whole premise is that it cannot damage a
-  # machine it does not administer, and a test that activates a configuration
-  # is the one place a bug in the test could break that premise. Both of these
-  # must hold before anything runs.
-  [ "$configured" = "$home" ] \
-    || fail "the variant configuration manages $configured, not the test home $home"
-  [ "$configured" != "$HOME" ] \
-    || fail "the variant configuration manages the real home directory - refusing to activate"
-
-  built=$(nix build --no-link --print-out-paths "$repo#packages.$SYSTEM.default" 2>/dev/null) \
-    || fail "could not build the variant configuration"
-
-  # Belt and braces, and the assertion that actually makes this safe: every
-  # absolute path in the activate script is derived from homeDirectory, so if
-  # the real home appears anywhere in it, something was not redirected.
-  ! grep -q -F "$HOME" "$built/activate" \
-    || fail "the variant's activate script still refers to $HOME - refusing to activate"
-
-  printf '%s\n' "$built"
-}
-
-# Run a built variant's activate script against a stub `brew` that exits $2.
-# Prints nothing; returns the activation's own exit status.
-dotfiles_run_activation() {
-  local built=$1 home=$2 prefix=$3 brew_exit=$4 nixbin status=0
-  nixbin=$(dirname "$(command -v nix)")
-
-  mkdir -p "$prefix/bin"
-  printf '#!/bin/sh\nexit %s\n' "$brew_exit" >"$prefix/bin/brew"
-  chmod +x "$prefix/bin/brew"
-
-  # env -i for the same reason the stand-in runs use it. USER is needed because
-  # the activate script reads it; nix has to be on PATH because installPackages
-  # shells out to it, and with HOME inside the temp tree the profile it writes
-  # lands there too rather than in the real user's.
-  env -i \
-    HOME="$home" \
-    USER="$(id -un)" \
-    PATH="/usr/bin:/bin:$nixbin" \
-    HOMEBREW_PREFIX="$prefix" \
-    "$built/activate" >"$home/../activation.log" 2>&1 || status=$?
-
-  return "$status"
-}
-
-test_a_failed_homebrew_step_still_leaves_the_font_installed() {
-  local root home built status=0
-  if ! command -v nix >/dev/null 2>&1; then
-    skip "font outcome check (nix not found)"
-    return 0
-  fi
-
-  root=$(dotfiles_test_tmproot dotfiles-fontoutcome)
-  home="$root/home"
-  mkdir -p "$home"
-
-  built=$(dotfiles_activate_variant "$home" "$root/repo") \
-    || fail "could not build a variant configuration to activate"
-
-  # A Mac with no usable Homebrew: the step finds the stub, the stub fails, and
-  # activation stops there.
-  dotfiles_run_activation "$built" "$home" "$root/prefix" 1 || status=$?
-  [ "$status" != 0 ] \
-    || fail "the activation succeeded even though the Homebrew step failed"
-
-  # The user installs Homebrew and rebuilds. This must repair the machine.
-  dotfiles_run_activation "$built" "$home" "$root/prefix" 0 \
-    || fail "the activation failed with a working Homebrew"
-
-  # The outcome, not the order: the font files are on disk.
-  [ -d "$home/Library/Fonts/HomeManager" ] \
-    || fail "no font was installed after a failed Homebrew step and a successful rebuild - the rsync was stranded behind its marker"
-  [ -n "$(find "$home/Library/Fonts/HomeManager" -type f -print -quit)" ] \
-    || fail "the font directory was created but is empty after a failed Homebrew step and a successful rebuild"
-
-  pass "homebrew: a failed Homebrew step does not strand the font install"
-}
+# AGENTS.md carries the standing rule and the full list of paths a redirected
+# homeDirectory does not redirect.
 
 # --- a Mac without Homebrew is told so ----------------------------------------
 
@@ -608,7 +502,6 @@ test_the_homebrew_step_installs_and_cannot_remove
 test_the_homebrew_step_does_not_touch_auto_update
 test_the_homebrew_step_neutralizes_the_cleanup_variables
 test_the_homebrew_step_runs_after_the_brewfile_is_written
-test_a_failed_homebrew_step_still_leaves_the_font_installed
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
 

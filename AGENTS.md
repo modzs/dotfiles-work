@@ -87,19 +87,13 @@ documents that seam.
   login shell would really see and warns when it would see nothing. It names
   that file and never writes to it; a check that cannot answer must read as
   unverified, never as fine.
-- **Never activate a configuration while testing.** `nix flake check`,
-  `nix build .#default` and `nix eval` are safe; `home-manager switch`,
+- **Never activate a configuration while testing, and no test may.** `nix flake
+  check`, `nix build .#default` and `nix eval` are safe; `home-manager switch`,
   `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
-  activation package is not activating it.
-  There is exactly one sanctioned exception, and it is not a licence to add
-  more: `tests/homebrew.test.sh` activates a *variant* configuration whose
-  `homeDirectory` is a temp directory, because the outcome it pins - that a
-  failed Homebrew step does not permanently strand the font install - cannot be
-  observed any other way. Every absolute path in an activate script derives
-  from `homeDirectory`, so redirecting it redirects all of them, and the helper
-  refuses to run anything until it has searched the built script for the real
-  home directory and found none. Any future exception needs that same guard and
-  the same reason.
+  activation package is not activating it, and reading the built `activate`
+  script as an artifact is safe - that is how the activation order is asserted.
+  Pointing `homeDirectory` at a temp directory does **not** make activating
+  safe; see the sharp edge below for why.
 - Run the suite with `./tests/run.sh` (`--strict` in CI, where a skipped check is
   a failure). It works from any directory, and there is a test count behind that
   claim: every test file declares `dotfiles_test_expect <n>`, and `test_summary`
@@ -131,6 +125,27 @@ documents that seam.
 
 ## Sharp edges found the hard way
 
+- **A built `activate` script holds absolute paths that do not come from
+  `homeDirectory`, so redirecting it does not redirect them.** The complete set,
+  as of the pinned Home Manager: `${NIX_STATE_DIR:-/nix/var/nix}/profiles/per-user/$USER`
+  and the matching `gcroots/per-user/$USER`, both derived from `$USER`;
+  `/bin/launchctl`, invoked in domain `gui/$UID`; `/etc/profiles/per-user/`,
+  read-only; and `/bin/bash`, `/bin/readlink`, `/bin/rsync`, `/bin/dirname`.
+  The per-user Nix state paths are destructive: when the pre-Nix-2.14 layout is
+  present, `migrateProfile` runs
+  `rm "$oldProfilesDir/home-manager" "$oldProfilesDir"/home-manager-*` against
+  the **real** user's profile, and it runs *before* the `USER` and `HOME` sanity
+  checks, so neither check can protect anything. The `launchctl` path is inert
+  here only because this configuration declares no launchd agent; it re-arms
+  silently the day one is added, with nothing failing loudly at that moment.
+  This is why no test may activate: a guard would have to keep that list
+  complete forever, and `./tests/run.sh` is documented in HOW-TO.md under "See
+  what would happen, without changing anything".
+  Method lesson, because it is what produced the false claim this replaces: a
+  probe whose pattern can only match the shape you expect cannot disconfirm
+  anything. "Every path derives from `homeDirectory`" was established with a
+  grep for `/Users` paths, which by construction could never have found the
+  `/nix/var/nix` counterexample that makes it false.
 - `ghostty` in nixpkgs is Linux-only. On macOS the attribute is `ghostty-bin`.
   `tests/packages.test.sh` catches this class of mistake for both architectures.
 - Home Manager's Darwin app handling flipped default at `stateVersion` 25.11:
