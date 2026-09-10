@@ -18,6 +18,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/personalize.sh"
 # shellcheck source=lib/git-identity.sh
 . "$DIR/lib/git-identity.sh"
+# shellcheck source=lib/install-report.sh
+. "$DIR/lib/install-report.sh"
 
 # Every step below resolves through ~/.dotfiles, so settle that path before
 # anything is installed and before sudo is asked for. Refusing here costs the
@@ -138,5 +140,11 @@ fi
 # silent unless git would have to invent an identity.
 git_identity_report "    "
 
-echo "==> Done."
-echo "    Open a new terminal, then use ./rebuild.sh for future changes."
+# The closing report, not a closing line. What this run installed is spread
+# across ~/.nix-profile/bin and ~/Applications, none of it is visible from the
+# shell this ran in, and a user who came from a personal dotfiles repo will go
+# looking in /Applications and in `brew list` and find nothing in either. All
+# three are expected states, and the moment to say so is here. The closing
+# headline is the report's too: it is what knows whether anything landed, and
+# it prints "==> Done." only when something did. See lib/install-report.sh.
+install_report "    "
