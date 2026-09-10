@@ -322,7 +322,8 @@ been written by that point, so your shell and editor are configured either way.
 
 Homebrew also needs to be on your `PATH` for the tools it installs to be
 usable. Its own installer arranges that, normally by adding
-`eval "$(/opt/homebrew/bin/brew shellenv)"` to `~/.zprofile`. This repo does not
+`eval "$(<prefix>/bin/brew shellenv)"` to `~/.zprofile`, where `<prefix>` is
+`/opt/homebrew` on Apple silicon and `/usr/local` on Intel. This repo does not
 touch your `PATH` for Homebrew's sake, and it finds `brew` by its prefix rather
 than by `PATH`, so a rebuild can succeed on a machine where your shell still
 cannot see `gh`. If that happens, the missing piece is that line.

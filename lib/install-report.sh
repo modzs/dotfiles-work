@@ -194,18 +194,20 @@ install_report() {
   fi
 
   printf '==> Done.\n'
-  printf '%s~/.nix-profile/bin now holds %s command-line tools, and the casks on\n' "$indent" "$count"
-  printf '%sthe Homebrew list - WezTerm, Ghostty and Claude Code - went where\n' "$indent"
-  printf '%sHomebrew puts casks: /Applications, and its own bin directory.\n' "$indent"
+  printf '%s~/.nix-profile/bin now holds %s command-line tools, and the names on\n' "$indent" "$count"
+  printf '%sthe Homebrew list in home.nix went where Homebrew puts them: its own\n' "$indent"
+  printf '%sprefix, and /Applications for the casks that are applications.\n' "$indent"
   printf '\n'
 
   # First, because everything else here is unverifiable from the shell the user
   # is standing in. This is the sentence whose absence turned a complete
   # install into "it installed nothing".
-  printf '%sNone of the tools above is on THIS terminal PATH. Nix only adds\n' "$indent"
+  printf '%sNone of the Nix tools above is on THIS terminal PATH. Nix only adds\n' "$indent"
   printf '%sitself to shells that start after it was installed, so this shell -\n' "$indent"
   printf '%sthe one you ran ./bootstrap.sh from - cannot see any of them, and\n' "$indent"
-  printf '%sneither can ./rebuild.sh if you run it here.\n' "$indent"
+  printf '%sneither can ./rebuild.sh if you run it here. Homebrew is different:\n' "$indent"
+  printf '%syou installed it before this ran, so what it put on your PATH is\n' "$indent"
+  printf '%sreachable here already.\n' "$indent"
   printf '\n'
   printf '%s  ==> Open a new terminal now. Everything below assumes you have.\n' "$indent"
 
