@@ -66,8 +66,13 @@ install_report_tool_count() {
 #   does not source ~/.zshrc, which is interactive-only, is this configuration's
 #   own file, and sets no PATH. Anything missed that way is a false warning,
 #   never a false all-clear.
+# - A marker on the answer. These startup files belong to whoever administers
+#   the Mac, and one that prints a banner would otherwise have its own output
+#   read as the front of PATH - which is where the profile sits, because the
+#   Determinate installer puts its block at the top of /etc/zshrc. Only the
+#   marked line is the answer; an answer with no marked line is no answer.
 install_report_login_path() {
-  local probe result
+  local probe result marker='__dotfiles_login_path__'
   command -v zsh >/dev/null 2>&1 || return 1
 
   # shellcheck disable=SC2016  # every expansion in here is zsh's to make, not this shell's
@@ -75,10 +80,12 @@ install_report_login_path() {
 for f in /etc/zshenv "$HOME/.zshenv" /etc/zprofile "$HOME/.zprofile" /etc/zshrc; do
   [ -r "$f" ] && . "$f"
 done
-print -rn -- "$PATH"
+print -r -- "__dotfiles_login_path__$PATH"
 '
   result=$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin TERM=dumb \
     zsh -f -c "$probe" </dev/null 2>/dev/null) || return 1
+  result=$(printf '%s\n' "$result" | grep "^$marker" | tail -n1) || return 1
+  result=${result#"$marker"}
   [ -n "$result" ] || return 1
   printf '%s\n' "$result"
 }

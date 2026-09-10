@@ -21,8 +21,8 @@
 # The reachability probe is a seam on purpose: these checks replace
 # install_report_login_path with one that returns a known PATH, so the decision
 # and the wording are tested without depending on how the machine running the
-# suite happens to have /etc/zshrc set up. The last check exercises the real
-# probe, for the one property no stub can prove.
+# suite happens to have /etc/zshrc set up. The last two checks exercise the real
+# probe, for the properties no stub can prove.
 #
 # Nothing here activates anything or touches the real home directory.
 set -u
@@ -37,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 7
+dotfiles_test_expect 8
 
 # A home directory that looks like one bootstrap.sh has just finished with: a
 # profile carrying a few tools. Echoes the path.
@@ -224,10 +224,43 @@ test_an_unanswerable_check_is_never_reported_as_fine() {
   pass "report: an unanswerable reachability check reads as unverified, not fine"
 }
 
+# --- the two properties no stub can prove -------------------------------------
+
+test_a_startup_file_that_prints_is_not_read_as_path() {
+  local home output status=0
+
+  home=$(install_report_fixture_home)
+
+  # These startup files belong to whoever administers the Mac, and one that
+  # greets the user is ordinary on a managed one. ~/.zprofile is the file of
+  # that set a test can legitimately write, and it reaches the probe the same
+  # way /etc/zshrc does. The damage is specific: the profile sits at the FRONT
+  # of PATH, so a banner lands exactly on the field the reachability check
+  # reads, and the user is warned about an install that is perfectly fine.
+  printf '%s\n' \
+    'print -r -- "Notice: this Mac is managed by somebody else."' \
+    'export PATH="$HOME/.nix-profile/bin:$PATH"' >"$home/.zprofile"
+
+  HOME="$home" install_report_login_path >/dev/null 2>&1 || status=$?
+  if [ "$status" != 0 ]; then
+    skip "login-shell probe (no usable zsh to probe with)"
+    return 0
+  fi
+
+  output=$(HOME="$home" install_report "    ")
+
+  assert_contains "$output" "Checked: a new login shell does find them" \
+    "the profile is on the login PATH, so the report should say so"
+  assert_not_contains "$output" "WARNING" \
+    "a banner a startup file printed was read as part of PATH"
+
+  pass "report: what a startup file prints is not mistaken for the login PATH"
+}
+
 # --- the one property no stub can prove ---------------------------------------
 
 test_the_probe_does_not_inherit_this_process_path() {
-  local home path status=0
+  local home sentinel path status=0
 
   home=$(install_report_fixture_home)
 
@@ -237,9 +270,18 @@ test_the_probe_does_not_inherit_this_process_path() {
   # terminal would really get, which is the one way this check could be
   # silently wrong in the direction of "all good".
   #
-  # The fixture profile is a temp directory that no startup file on any machine
-  # mentions, so a probe that answers with it can only have inherited it.
-  path=$(HOME="$home" PATH="$home/.nix-profile/bin:$PATH" install_report_login_path) \
+  # The sentinel is deliberately NOT under the fixture home. A startup file can
+  # rebuild a HOME-relative path without inheriting anything: /etc/zshrc's
+  # Determinate block sources nix-daemon.sh, which sets NIX_LINK=$HOME/.nix-profile
+  # and prepends $NIX_LINK/bin, and the probe passes HOME through on purpose. So
+  # "$home/.nix-profile/bin" in the answer proves nothing, and asserting on it
+  # fails on every Determinate Mac and in CI, where the nix-installer-action
+  # edits the shell profiles. No startup file can name this directory, so it
+  # can only appear in the answer by having been inherited.
+  sentinel="$(dirname "$home")/sentinel-bin"
+  mkdir -p "$sentinel"
+
+  path=$(HOME="$home" PATH="$sentinel:$PATH" install_report_login_path) \
     || status=$?
 
   if [ "$status" != 0 ]; then
@@ -248,7 +290,7 @@ test_the_probe_does_not_inherit_this_process_path() {
   fi
 
   case ":$path:" in
-    *:"$home/.nix-profile/bin":*)
+    *:"$sentinel":*)
       fail "the reachability probe inherited the calling process's PATH" ;;
   esac
 
@@ -261,6 +303,7 @@ test_the_report_mentions_the_zshrc_backup_only_when_there_is_one
 test_an_unreachable_profile_is_a_loud_warning_naming_etc_zshrc
 test_a_reachable_profile_produces_no_warning
 test_an_unanswerable_check_is_never_reported_as_fine
+test_a_startup_file_that_prints_is_not_read_as_path
 test_the_probe_does_not_inherit_this_process_path
 
 test_summary
