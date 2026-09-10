@@ -15,12 +15,12 @@
 #
 # The report this replaces was two lines - "Done." and "Open a new terminal,
 # then use ./rebuild.sh for future changes" - printed after forty lines of Nix
-# build output. That is true and it is not enough. A user arriving from a
-# personal dotfiles repo, where a system package manager drops apps into
-# /Applications, looks in /Applications, looks at `brew list`, types a tool
-# name in the shell they just ran this from, finds nothing in any of the three,
-# and concludes the run did nothing. All three are expected states here, and
-# none of them was said out loud at the moment it mattered.
+# build output. That is true and it is not enough. A user types a tool name in
+# the shell they just ran this from, finds nothing, and concludes the run did
+# nothing: the Nix half of the install reaches only shells started afterwards,
+# which is an expected state that nothing said out loud at the moment it
+# mattered. What was installed is also split across two package managers now,
+# so "where did it go" has two answers rather than one.
 #
 # Must stay bash 3.2 compatible - macOS ships no newer bash. See AGENTS.md.
 
@@ -194,17 +194,18 @@ install_report() {
   fi
 
   printf '==> Done.\n'
-  printf '%s~/.nix-profile/bin now holds %s command-line tools, and WezTerm and\n' "$indent" "$count"
-  printf '%sGhostty are in ~/Applications/Home Manager Apps.\n' "$indent"
+  printf '%s~/.nix-profile/bin now holds %s command-line tools, and the casks on\n' "$indent" "$count"
+  printf '%sthe Homebrew list - WezTerm, Ghostty and Claude Code - went where\n' "$indent"
+  printf '%sHomebrew puts casks: /Applications, and its own bin directory.\n' "$indent"
   printf '\n'
 
   # First, because everything else here is unverifiable from the shell the user
   # is standing in. This is the sentence whose absence turned a complete
   # install into "it installed nothing".
-  printf '%sNone of it is on THIS terminal PATH. Nix only adds itself to\n' "$indent"
-  printf '%sshells that start after it was installed, so this shell - the one\n' "$indent"
-  printf '%syou ran ./bootstrap.sh from - cannot see any of it, and neither can\n' "$indent"
-  printf '%s./rebuild.sh if you run it here.\n' "$indent"
+  printf '%sNone of the tools above is on THIS terminal PATH. Nix only adds\n' "$indent"
+  printf '%sitself to shells that start after it was installed, so this shell -\n' "$indent"
+  printf '%sthe one you ran ./bootstrap.sh from - cannot see any of them, and\n' "$indent"
+  printf '%sneither can ./rebuild.sh if you run it here.\n' "$indent"
   printf '\n'
   printf '%s  ==> Open a new terminal now. Everything below assumes you have.\n' "$indent"
 
@@ -213,16 +214,18 @@ install_report() {
   printf '\n'
   printf '%sCheck what you got:\n' "$indent"
   printf '%s  ls ~/.nix-profile/bin\n' "$indent"
-  printf '%s  ls ~/Applications/Home\\ Manager\\ Apps\n' "$indent"
+  printf '%s  brew list\n' "$indent"
   printf '\n'
   printf '%sTwo things that surprise people:\n' "$indent"
-  printf '%s  - The terminal apps are symlinks in ~/Applications/Home Manager\n' "$indent"
-  printf '%s    Apps, not copies in /Applications, and Spotlight will not index\n' "$indent"
-  printf '%s    them. Start one by path, or just type wezterm or ghostty.\n' "$indent"
-  printf '%s  - This installs no Homebrew and never will, so "brew list" stays\n' "$indent"
-  printf '%s    empty. Everything above came from nixpkgs instead. README.md\n' "$indent"
-  printf '%s    explains why a machine you do not administer gets neither a\n' "$indent"
-  printf '%s    system package manager nor anything in /Applications.\n' "$indent"
+  printf '%s  - What was installed came from two places, not one. The tools\n' "$indent"
+  printf '%s    above are from nixpkgs and live in your home directory; the\n' "$indent"
+  printf '%s    names on the Homebrew list went into the Homebrew prefix, and\n' "$indent"
+  printf '%s    the application casks to /Applications, where Spotlight finds\n' "$indent"
+  printf '%s    them like any other app.\n' "$indent"
+  printf '%s  - This installs no Homebrew and never will. It only asks the one\n' "$indent"
+  printf '%s    you installed yourself to add what the list names, and it\n' "$indent"
+  printf '%s    never asks it to remove anything. README.md is exact about\n' "$indent"
+  printf '%s    what that step does and does not do.\n' "$indent"
 
   install_report_zshrc_backup "$indent"
 

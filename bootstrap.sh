@@ -167,10 +167,10 @@ fi
 git_identity_report "    "
 
 # The closing report, not a closing line. What this run installed is spread
-# across ~/.nix-profile/bin and ~/Applications, none of it is visible from the
-# shell this ran in, and a user who came from a personal dotfiles repo will go
-# looking in /Applications and in `brew list` and find nothing in either. All
-# three are expected states, and the moment to say so is here. The closing
-# headline is the report's too: it is what knows whether anything landed, and
-# it prints "==> Done." only when something did. See lib/install-report.sh.
+# across two package managers - ~/.nix-profile/bin from Nix, the Homebrew
+# prefix and /Applications from the Brewfile step - and none of the Nix half is
+# visible from the shell this ran in. Both are expected states, and the moment
+# to say so is here. The closing headline is the report's too: it is what knows
+# whether anything landed, and it prints "==> Done." only when something did.
+# See lib/install-report.sh.
 install_report "    "

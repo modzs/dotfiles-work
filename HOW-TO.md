@@ -39,18 +39,18 @@ short list of formulae and casks comes from Homebrew instead.
 
 **You do not get a Homebrew.** This repository never installs a system package
 manager and never will - that is the whole reason it is separate from a
-personal dotfiles repo. It drives the Homebrew *you* installed, and refuses to
-finish the switch when there is none.
+personal dotfiles repo. It drives the Homebrew *you* installed, and
+`./bootstrap.sh` refuses to start on a Mac that has none.
 
-Two things follow from that, and both are normal:
+Two things are worth knowing before you go looking, and both are normal:
 
 | You look here | You find | Because |
 | --- | --- | --- |
-| `~/Applications/Home Manager Apps` | nothing | no app on the Nix side today - the terminals are casks, so they land in `/Applications` |
+| `~/Applications/Home Manager Apps` | nothing | nothing on the Nix side is a GUI app today - the terminals are casks, so they land in `/Applications` |
 | the shell you just ran `bootstrap.sh` in | nothing | Nix only reaches shells started afterwards |
 
 `ls ~/.nix-profile/bin` and `brew list` are the two commands that show you what
-really got installed. `bootstrap.sh` prints the first when it finishes.
+really got installed. `bootstrap.sh` prints both when it finishes.
 
 ### The setup
 
