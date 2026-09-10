@@ -372,9 +372,19 @@ If a new terminal still cannot find it, the Nix block is missing from
 `/etc/zshrc`; see [README.md](README.md#what-this-touches-and-what-it-does-not)
 for what to do about that on a Mac you do not administer.
 
-**`dotfiles-work: no Homebrew at ...`** - the rebuild got all the way to its
-last step and found no `brew` to talk to. Everything Nix installs is already in
-place; only the formulae and casks are missing. Install Homebrew from
+**`ERROR: no Homebrew at ...`** - `./bootstrap.sh` checks for Homebrew before it
+does anything, and did not find one. Nothing has been installed and you were not
+asked for a password, so there is nothing to undo. Install Homebrew from
+[brew.sh](https://brew.sh) and run `./bootstrap.sh` again. If Homebrew *is*
+installed, check `HOMEBREW_PREFIX`: the preflight trusts that variable when the
+environment sets it, and a stale value points it at the wrong place. It uses the
+same rule the rebuild does, so the two cannot disagree.
+
+**`dotfiles-work: no Homebrew at ...`** - the same problem one script later. A
+rebuild got all the way to its last step and found no `brew` to talk to, which
+is what happens on a machine that had Homebrew when it was set up and does not
+now. Everything Nix installs is already in place; only the formulae and casks
+are missing. Install Homebrew from
 [brew.sh](https://brew.sh) and run `./rebuild.sh` again - this configuration
 requires it, and emptying the lists in `home.nix` is not a way around it. If
 Homebrew *is* installed, check `HOMEBREW_PREFIX`: the step trusts that variable

@@ -24,11 +24,11 @@
 # Print the locations this machine would look in, space separated. Split out so
 # the failure message names the place it actually looked rather than a guess.
 dotfiles_homebrew_searched() {
+  local searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
   if [ -n "${HOMEBREW_PREFIX:-}" ]; then
-    printf '%s\n' "$HOMEBREW_PREFIX/bin/brew"
-  else
-    printf '%s\n' "/opt/homebrew/bin/brew /usr/local/bin/brew"
+    searched="$HOMEBREW_PREFIX/bin/brew"
   fi
+  printf '%s\n' "$searched"
 }
 
 # Print the path of the Homebrew this machine would use, or nothing at all.

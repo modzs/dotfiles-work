@@ -274,15 +274,27 @@ dotfiles_write_brewscan() {
   script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-brewscan.XXXXXX") \
     || fail "could not create a temp file for the tokenizer"
   cat >"$script" <<'SCAN'
-import shlex, sys
+import re, shlex, sys
 
 # The contract is that no script this repo runs may INVOKE Homebrew. Naming its
 # path is a different act and a legitimate one: lib/homebrew-present.sh has to
 # ask whether /opt/homebrew/bin/brew exists, because bootstrap.sh must turn a
 # Mac without Homebrew away before it installs Nix. A check that cannot tell
 # `[ -x /opt/homebrew/bin/brew ]` from running brew was asserting the wrong
-# thing, so this one looks at POSITION: a token whose basename is `brew` is a
-# problem when it is the command word, and unremarkable when it is an argument.
+# thing, so this one looks at POSITION.
+#
+# It asks that question in the direction that FAILS CLOSED: a token whose
+# basename is `brew` counts as an invocation unless something makes it
+# unmistakably an argument. The previous shape asked the opposite - it listed
+# the tokens after which `brew` counted as a command - and every construct
+# nobody had thought to list was silently permitted. `if brew ...`,
+# `while brew ...`, `until brew ...`, `exec brew ...` and `command brew ...`
+# all passed a check whose whole purpose is to forbid them, because `if`,
+# `while` and `until` were missing from a list that had `then` and `do`. That
+# list could never be finished: a command prefix is any word, so the ways of
+# reaching `brew` are open ended, while the ways of making it an argument are
+# few and belong to this repository. Getting this direction wrong costs a
+# comment on the list below; getting the old one wrong cost the guarantee.
 #
 # An explicit separator token is inserted after each newline first. shlex treats
 # a newline as ordinary whitespace, so without this the first word of every line
@@ -295,13 +307,30 @@ import shlex, sys
 # and a scanner that cheerfully passes anything - which is exactly what happened
 # here, and why the fixture check below exists.
 BANNED = {"brew"}
-# What can precede a command word. `in` is deliberately absent: in `for x in
-# LIST` and `case x in` what follows is a word list, so treating it as a
-# separator would flag the path-existence loop this check exists to permit.
-SEPARATORS = {
-    "\n", ";", ";;", "|", "||", "&", "&&", "(", ")", "{", "}",
-    "then", "else", "elif", "do", "!", "time",
+
+# The complete set of things that make a `brew` token an argument rather than a
+# command. Each entry is here because this repository needs it, and anything
+# not on it is treated as an invocation.
+ARGUMENT_INTRODUCERS = {
+    # A path existence test, which is the one use this repo actually has:
+    # `[ -x /opt/homebrew/bin/brew ]`. The full set of unary file operators,
+    # so a future check can use whichever one fits.
+    "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-L", "-p",
+    "-r", "-S", "-s", "-u", "-w", "-x", "-O", "-G", "-N",
+    # `for candidate in <paths>` and `case x in` introduce a word list, never
+    # a command.
+    "in",
 }
+
+# A command substitution reaches `brew` however it is spelled, so a token
+# carrying one is an invocation whatever precedes it.
+SUBSTITUTION_OPENERS = ("`", "$(")
+
+# NAME=value. An assignment names a path, it does not run it. Combined with the
+# substitution check above, `x=/opt/homebrew/bin/brew` is allowed while
+# x=`brew --prefix` is not.
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
 INSTALLERS = (
     "raw.githubusercontent.com/homebrew",
     "homebrew/install",
@@ -309,6 +338,18 @@ INSTALLERS = (
 )
 
 NEWLINE = "\x00NL\x00"
+
+
+# The name a token would run, with any command-substitution opener stripped so
+# that x=`brew --prefix` is seen as `brew` rather than as "x=`brew".
+def command_name(token):
+    text = token
+    for opener in SUBSTITUTION_OPENERS:
+        found = text.rfind(opener)
+        if found != -1:
+            text = text[found + len(opener):]
+    return text.rsplit("/", 1)[-1]
+
 
 problems = []
 for path in sys.argv[1:]:
@@ -324,8 +365,16 @@ for path in sys.argv[1:]:
         continue
     previous = "\n"
     for token in tokens:
-        if token.rsplit("/", 1)[-1] in BANNED and previous in SEPARATORS:
-            problems.append("%s: runs %r" % (path, token))
+        if command_name(token) in BANNED:
+            argument = (
+                ASSIGNMENT.match(token) is not None
+                or previous in ARGUMENT_INTRODUCERS
+                # The second and later paths in a word list, whose predecessor
+                # is the path before them.
+                or command_name(previous) in BANNED
+            )
+            if any(opener in token for opener in SUBSTITUTION_OPENERS) or not argument:
+                problems.append("%s: runs %r" % (path, token))
         previous = token
     lowered = source.lower()
     for installer in INSTALLERS:
@@ -410,60 +459,69 @@ test_nothing_here_installs_homebrew() {
 }
 
 test_the_homebrew_scan_tells_an_invocation_from_a_path_test() {
-  local script root report status=0
+  local script root case_name body verdict report status=0
+
   if ! command -v python3 >/dev/null 2>&1; then
     skip "Homebrew scanner behaviour check (python3 not found)"
     return 0
   fi
 
-  # The check above passes when it finds nothing, which is also what a broken
-  # scanner does. So the scanner is run here against two fixtures whose answer
-  # is known in advance: one that really invokes Homebrew and must be flagged,
-  # one that only asks whether its path exists and must not be. Without this,
-  # narrowing the rule could have quietly turned the check into a no-op and the
-  # suite would have gone on printing ok.
+  # The check above passes by finding nothing, which is also what a scanner
+  # that cannot see anything does. So the scanner is run here against a matrix
+  # of one-line scripts whose verdict is known in advance.
+  #
+  # A matrix and not two examples, because this check has now been narrower
+  # than it claimed twice, and both times the reason was the same: its test
+  # exercised only the spelling someone had thought of. The first time, every
+  # file tokenized to nothing and it passed everything. The second time it read
+  # `brew install` at the start of a line but not `if brew ...`, `while
+  # brew ...`, `exec brew ...` or `command brew ...`. Every row below is a
+  # spelling that was once wrong or is a case the rule deliberately permits, so
+  # a third narrowing has to break a named row rather than slip through a gap.
   script=$(dotfiles_write_brewscan) \
     || fail "could not write the Homebrew-invocation scanner"
   root=$(dotfiles_test_tmproot dotfiles-brewscan-fixtures)
 
-  cat >"$root/invokes.sh" <<'FIXTURE'
-#!/usr/bin/env bash
-# A convenience someone might add: install the prerequisite for the user.
-if ! command -v nix >/dev/null 2>&1; then
-  brew install nix
-fi
-/opt/homebrew/bin/brew bundle install --file "$HOME/Brewfile"
-FIXTURE
+  # <verdict> <name> <shell line>. The line is the remainder of the record, so a
+  # fixture is free to contain the pipe, semicolon and quote characters that
+  # shell invocations are actually written with.
+  while read -r verdict case_name body; do
+    [ -n "$case_name" ] || continue
+    printf '#!/usr/bin/env bash\n%s\n' "$body" >"$root/$case_name.sh"
 
-  cat >"$root/probes.sh" <<'FIXTURE'
-#!/usr/bin/env bash
-# What lib/homebrew-present.sh does: a path question, never a command.
-for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-  if [ -x "$candidate" ]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-done
-FIXTURE
+    report=$(python3 "$script" "$root/$case_name.sh") || status=$?
+    [ "$status" = 0 ] || fail "the scanner could not tokenize the $case_name fixture"
 
-  report=$(python3 "$script" "$root/invokes.sh") || status=$?
-  [ "$status" = 0 ] || fail "the scanner could not tokenize the invoking fixture"
-  assert_contains "$report" "invokes.sh" \
-    "the scanner did not flag a script that runs \`brew install\` - it would pass anything"
-  # Both spellings, because a bare command word and an absolute path in command
-  # position are the two ways this could arrive.
-  assert_contains "$report" "'brew'" \
-    "the scanner did not flag a bare \`brew\` command word"
-  assert_contains "$report" "'/opt/homebrew/bin/brew'" \
-    "the scanner did not flag an absolute brew path used as a command"
+    case $verdict in
+      flag)
+        [ -n "$report" ] \
+          || fail "the scanner passed \"$body\", which invokes Homebrew - the check would not catch it in a real script" ;;
+      pass)
+        [ -z "$report" ] \
+          || fail "the scanner flagged \"$body\", which only names a path: $report" ;;
+      *) fail "the $case_name fixture declares an unknown verdict: $verdict" ;;
+    esac
+  done <<'MATRIX'
+flag plain brew install nix
+flag abspath /opt/homebrew/bin/brew bundle install
+flag negated if ! /opt/homebrew/bin/brew --version >/dev/null 2>&1; then :; fi
+flag if if brew list --formula >/dev/null; then :; fi
+flag while while brew outdated; do :; done
+flag until until brew list; do :; done
+flag exec exec /opt/homebrew/bin/brew bundle install
+flag commandprefix command brew install nix
+flag casearm case x in y) brew install z ;; esac
+flag pipeline true | brew install nix
+flag substitution prefix=$(brew --prefix)
+flag backtick prefix=`brew --prefix`
+pass pathtest [ -x /opt/homebrew/bin/brew ] && echo found
+pass wordlist for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$c" ]; done
+pass quotedlist searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
+MATRIX
 
-  report=$(python3 "$script" "$root/probes.sh") || status=$?
   rm -f "$script"
-  [ "$status" = 0 ] || fail "the scanner could not tokenize the probing fixture"
-  [ -z "$report" ] \
-    || fail "the scanner flagged a path existence test as an invocation: $report"
 
-  pass "scripts: the Homebrew scan flags an invocation and allows a path test"
+  pass "scripts: the Homebrew scan flags every spelling of an invocation and allows a path test"
 }
 
 # --- the only Homebrew the artifact knows about is an existing one ------------

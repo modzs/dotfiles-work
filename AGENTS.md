@@ -67,11 +67,15 @@ invoking one is what fails. The Homebrew one goes further and looks at position,
 so naming a path is allowed and only a command word counts - `lib/homebrew-present.sh`
 has to ask whether `/opt/homebrew/bin/brew` exists. It is run against fixture
 scripts with known answers, so narrowing it cannot quietly turn it into a no-op.
-Its edge is worth knowing: a literal command word is what it matches, so a brew
-path held in a variable and run as `"$BREW" install` would get past it. The way
-that stays true is that no script here holds such a path -
-`dotfiles_homebrew_require` reports what it found instead of returning it - not
-that the check would notice. `tests/homebrew.test.sh` runs the Homebrew step
+It decides that question in the direction that fails closed: a `brew` token
+counts as an invocation unless something makes it an argument, and the list of
+those is short and belongs to this repo. The earlier shape asked the opposite,
+listing the tokens after which `brew` counted as a command, and `if brew`,
+`while brew`, `exec brew` and `command brew` all walked through the gaps in that
+list. Its remaining edge is indirection: a path held in a variable and run as
+`"$BREW" install` is still invisible to it. What keeps that from mattering is
+that no script here holds such a path - `dotfiles_homebrew_require` reports what
+it found instead of returning it - not that the check would notice. `tests/homebrew.test.sh` runs the Homebrew step
 against a recording stand-in for `brew` and fails if it passes anything that
 could uninstall or upgrade, if it lets either Homebrew cleanup variable through
 from the environment, if a missing Homebrew produces a raw error rather than an

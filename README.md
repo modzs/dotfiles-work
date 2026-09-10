@@ -97,10 +97,15 @@ whose name is not on the cask list is touched at all.
 
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns
-the machine. If Homebrew is absent, this configuration stops with an explanation
-at its last step. Everything Nix installs is already in place by then - your
-shell, your editor, your git config - and only the formulae and casks are
-missing. Nothing outside your home directory was touched.
+the machine. If Homebrew is absent, this configuration stops with an
+explanation, and where it stops depends on which script you ran. `./bootstrap.sh`
+checks before it does anything at all: it refuses up front, before Nix is
+installed and before the one password prompt, so a Mac that cannot have Homebrew
+is turned away having had nothing done to it. `./rebuild.sh` on a machine that
+had Homebrew and lost it stops later, at the last activation step - everything
+Nix installs is already in place by then, your shell and editor and git config
+included, and only the formulae and casks are missing. Either way nothing
+outside your home directory was touched.
 
 It does not run `brew update` either. But it does not stop Homebrew from
 updating itself: unless you have exported `HOMEBREW_NO_AUTO_UPDATE` yourself,
@@ -309,9 +314,11 @@ is inside your home directory.
 ### Homebrew has to be there before the first rebuild
 
 The Homebrew step runs on every switch, and it does not install Homebrew - see
-"What this touches" above for why. If Homebrew is missing, the rebuild stops and
-tells you so; everything Nix installs has already been written by that point, so
-your shell and editor are configured either way.
+"What this touches" above for why. `./bootstrap.sh` will not start without it:
+it checks first and refuses before installing Nix, so a first run on a Mac with
+no Homebrew costs you nothing. If Homebrew goes missing later, `./rebuild.sh`
+stops at that last step and tells you so; everything Nix installs has already
+been written by that point, so your shell and editor are configured either way.
 
 Homebrew also needs to be on your `PATH` for the tools it installs to be
 usable. Its own installer arranges that, normally by adding
