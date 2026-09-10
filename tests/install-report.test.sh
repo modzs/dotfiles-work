@@ -37,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 6
+dotfiles_test_expect 7
 
 # A home directory that looks like one bootstrap.sh has just finished with: a
 # profile carrying a few tools. Echoes the path.
@@ -86,8 +86,8 @@ test_the_report_says_what_was_installed_and_where() {
 
   # The count is read off the profile, so it is a number the user can check
   # with the very command the report gives them.
-  assert_contains "$output" "Installed 3 command-line tools" \
-    "the report should say how many tools the switch actually installed"
+  assert_contains "$output" "holds 3 command-line tools" \
+    "the report should say how many tools the profile really carries"
   # shellcheck disable=SC2088  # a literal to find in the report's text, not a path to expand
   assert_contains "$output" "~/.nix-profile/bin" \
     "the report should say where the tools went"
@@ -104,6 +104,31 @@ test_the_report_says_what_was_installed_and_where() {
     "the report should say Homebrew is deliberately absent"
 
   pass "report: says what was installed, where it went, and why this shell cannot see it"
+}
+
+test_an_empty_profile_is_reported_as_a_broken_install() {
+  local home output
+  home=$(install_report_fixture_home)
+  rm -rf "$home/.nix-profile"
+  # The state this must not paper over: a login shell that would find the
+  # profile on PATH, because the /etc/zshrc line adds ~/.nix-profile/bin
+  # whether or not the directory exists. The reachability check alone would
+  # therefore confirm a new terminal finds tools that are not there.
+  install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
+
+  output=$(HOME="$home" install_report "    ")
+  install_report_restore_probe
+
+  assert_contains "$output" "WARNING" \
+    "a profile with no tools in it is a broken install, not a quiet zero"
+  assert_not_contains "$output" "0 command-line tools" \
+    "the report must not read as a successful install of nothing"
+  assert_not_contains "$output" "Checked: a new login shell does find them" \
+    "the report must not confirm reachability of tools that do not exist"
+  assert_contains "$output" "bootstrap.sh again" \
+    "the report should say what to do about it"
+
+  pass "report: an empty or missing profile reads as a broken install"
 }
 
 test_the_report_mentions_the_zshrc_backup_only_when_there_is_one() {
@@ -223,6 +248,7 @@ test_the_probe_does_not_inherit_this_process_path() {
 }
 
 test_the_report_says_what_was_installed_and_where
+test_an_empty_profile_is_reported_as_a_broken_install
 test_the_report_mentions_the_zshrc_backup_only_when_there_is_one
 test_an_unreachable_profile_is_a_loud_warning_naming_etc_zshrc
 test_a_reachable_profile_produces_no_warning

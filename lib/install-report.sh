@@ -22,7 +22,7 @@
 #
 # Must stay bash 3.2 compatible - macOS ships no newer bash. See AGENTS.md.
 
-# How many command-line tools the switch put on this account's profile. Read
+# How many command-line tools this account's profile carries right now. Read
 # off the profile rather than counted from home.nix: the number a user can
 # check with `ls` is the only one worth printing, and one package can install
 # more than one binary.
@@ -135,8 +135,32 @@ install_report() {
   local count
   count=$(install_report_tool_count)
 
-  printf '%sInstalled %s command-line tools into ~/.nix-profile/bin, plus\n' "$indent" "$count"
-  printf '%sWezTerm and Ghostty into ~/Applications/Home Manager Apps.\n' "$indent"
+  # What the profile HOLDS, not what this run put there. bootstrap.sh is safe
+  # to run twice, and a second run that installs nothing new must not claim it
+  # installed everything - that is the same overstatement this report exists to
+  # remove. Nothing here can tell the two runs apart, so it does not try.
+  #
+  # Zero is not a small number here, it is a broken install: a switch that
+  # reported success always leaves binaries in the profile. It must not read as
+  # a cheerful "0 tools" either, and the reachability check below cannot catch
+  # it - the /etc/zshrc line puts ~/.nix-profile/bin on PATH whether or not the
+  # directory exists, so it would go on to confirm a new terminal finds tools
+  # that are not there.
+  if [ "$count" = 0 ]; then
+    printf '%sWARNING: ~/.nix-profile/bin is empty or missing, so this account\n' "$indent"
+    printf '%shas no command-line tools from this configuration - even though\n' "$indent"
+    printf '%sthe switch above reported success. Something is wrong; this run\n' "$indent"
+    printf '%sis not finished.\n' "$indent"
+    printf '\n'
+    printf '%sLook at what is really there, then run ./bootstrap.sh again:\n' "$indent"
+    printf '%s  ls -la ~/.nix-profile/bin\n' "$indent"
+    printf '\n'
+    printf '%sThe Troubleshooting section of HOW-TO.md covers what comes up.\n' "$indent"
+    return 0
+  fi
+
+  printf '%s~/.nix-profile/bin now holds %s command-line tools, and WezTerm and\n' "$indent" "$count"
+  printf '%sGhostty are in ~/Applications/Home Manager Apps.\n' "$indent"
   printf '\n'
 
   # First, because everything else here is unverifiable from the shell the user

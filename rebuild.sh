@@ -78,8 +78,12 @@ STATUS=0
 if [ "$STATUS" = 0 ]; then
   git_identity_report
 else
-  echo "ERROR: the switch failed, so nothing in your home directory changed." >&2
-  echo "       Nothing was installed, updated or removed by this run." >&2
+  echo "ERROR: the rebuild did not complete." >&2
+  echo "       Some changes may already have been applied to your home" >&2
+  echo "       directory: the switch writes as it goes, and a failure part of" >&2
+  echo "       the way through leaves the rest undone rather than undoing what" >&2
+  echo "       it had already written." >&2
+  echo "       Re-run ./rebuild.sh once the error above is fixed." >&2
   echo "       The error itself is above this line. HOW-TO.md's Troubleshooting" >&2
   echo "       section covers the ones that come up." >&2
 fi

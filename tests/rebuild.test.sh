@@ -185,8 +185,14 @@ test_a_failed_switch_says_so_last_and_suppresses_the_identity_report() {
   last=$(printf '%s\n' "$output" | grep -v '^[[:space:]]*$' | tail -n1)
 
   assert_eq "$REBUILD_STATUS" 7 "the switch's own exit status should be re-raised"
-  assert_contains "$output" "nothing in your home directory changed" \
-    "a failed switch should say that nothing changed"
+  assert_contains "$output" "the rebuild did not complete" \
+    "a failed switch should say that it failed"
+  # And it must not claim more than it can know. The switch writes as it goes,
+  # so a failure part of the way through can leave the home directory half
+  # updated; telling the user nothing changed would be the same untruth as the
+  # one this script exists to stop printing, with the sign reversed.
+  assert_contains "$output" "may already have been applied" \
+    "a failed switch should say the home directory may be partly updated"
 
   # The identity report is friendly advice. Printed after a failure it put
   # seven reassuring lines underneath an error, which is how a run that changed
@@ -216,7 +222,7 @@ test_a_successful_switch_runs_the_identity_report() {
   # say - which is the half of the behaviour the failure case must not have.
   assert_contains "$output" "Heads up" \
     "the identity report should still run after a successful switch"
-  assert_not_contains "$output" "nothing in your home directory changed" \
+  assert_not_contains "$output" "the rebuild did not complete" \
     "a successful switch must not claim it failed"
 
   # And the switch was handed the configuration this repo declares, through
