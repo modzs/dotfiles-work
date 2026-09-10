@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Apply this configuration to your home directory.
 #
-# No sudo, and nothing here can ask for a privilege it does not have. What this
-# writes is your home directory, plus - through a Homebrew you installed
-# yourself - the formulae and casks home.nix lists. It never uninstalls either.
+# Nothing here runs sudo or asks you for a password. What this writes is your
+# home directory, plus - through a Homebrew you installed yourself - the
+# formulae and casks home.nix lists. It uninstalls neither.
+#
+# One qualification, because an unqualified promise here would be false: when a
+# cask on that list replaces an application you do not own - one an employer's
+# management software deployed, owned by root - Homebrew cannot remove it as
+# you, and falls back to taking ownership with sudo. That prompt is Homebrew's,
+# not this script's, and it is the only way a rebuild can ask for a password.
 # See README.md for exactly where that line falls and AGENTS.md for why.
 set -euo pipefail
 

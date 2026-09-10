@@ -3,17 +3,21 @@
 # Run this once. After it finishes, use ./rebuild.sh for every later change.
 #
 # The only thing here that needs sudo is the Nix installer in step 1, and that
-# is the only time this repo ever asks for it. No machine name, no /etc, no
+# is the only time this repo asks for a password. No machine name, no /etc, no
 # macOS system settings, and no package manager installed on your behalf.
 #
 # One part of the switch in step 6 does reach outside your home directory: it
 # hands a generated Brewfile to a Homebrew you installed yourself, and Homebrew
-# installs into its own prefix. It never uninstalls anything, and it never
-# installs or updates Homebrew itself. The one thing it will replace is an
-# application already sitting where a cask on its list wants to be - that list
-# is in home.nix and it is short. If Homebrew is not there, step 6
-# says so and stops - everything before it has already been applied. README.md
-# is exact about all of this.
+# installs into its own prefix. It uninstalls nothing, and it neither installs
+# nor updates Homebrew itself. The one thing it will replace is an application
+# already sitting where a cask on its list wants to be - that list is in
+# home.nix and it is short. If that app belongs to someone else, replacing it is
+# where Homebrew can ask for a password of its own; README.md is exact about
+# that case and about all of this.
+#
+# Homebrew has to be installed before this runs. The preflight below checks for
+# it before step 1, so a Mac without it is turned away before anything has been
+# installed and before any password is asked for.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -28,6 +32,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/git-identity.sh"
 # shellcheck source=lib/install-report.sh
 . "$DIR/lib/install-report.sh"
+# shellcheck source=lib/homebrew-present.sh
+. "$DIR/lib/homebrew-present.sh"
 
 # Every step below resolves through ~/.dotfiles, so settle that path before
 # anything is installed and before sudo is asked for. Refusing here costs the
@@ -42,6 +48,15 @@ if [ "$PREFLIGHT" = already ]; then
 else
   echo "    ok"
 fi
+
+# The other hard prerequisite, and it is checked here for the same reason: this
+# configuration requires Homebrew, but the step that needs it is the last thing
+# a switch does. Finding out then would cost the user a Nix install and a
+# password before the bad news. This asks a path question only; it never runs
+# Homebrew.
+echo "==> Preflight: Homebrew"
+BREW="$(dotfiles_homebrew_require)"
+echo "    found $BREW"
 
 echo "==> Step 1: Determinate Nix"
 echo "    This is the one and only step that asks for your password."

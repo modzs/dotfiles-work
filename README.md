@@ -38,22 +38,37 @@ rather than claiming a containment that no longer holds.
 | Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself - though Homebrew may still auto-update itself when asked to install, see below |
 | Add to what Homebrew has installed | Uninstall *anything*, or let the environment ask it to - see below |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
-| Ask for your password **once**, to install Nix | Ask for your password ever again |
+| Ask for your password **once**, to install Nix | Ask for your password again itself, or run `sudo` at all - though a cask replacing an app you do not own can make *Homebrew* ask, see below |
 
 Three of those deserve to be spelled out.
 
-**It never uninstalls anything.** Homebrew's "bundle" mechanism can be run in a
-mode that uninstalls whatever is not on the list. This configuration passes no
-flag that asks for it, and it goes one step further: that mode can also be
-turned on from the environment, by `HOMEBREW_BUNDLE_INSTALL_CLEANUP` or
+**It asks Homebrew to uninstall nothing.** Homebrew's "bundle" mechanism can be
+run in a mode that uninstalls whatever is not on the list. This configuration
+passes no flag that asks for it, and it goes one step further: that mode can
+also be turned on from the environment, by `HOMEBREW_BUNDLE_INSTALL_CLEANUP` or
 `HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP`, so the step unsets both before it runs
 Homebrew. Whatever is exported on the machine, in a shell profile or by a
-managed configuration profile, it cannot make a rebuild uninstall anything.
-Software installed on this Mac by anyone, for any reason - a security agent, a
-VPN client, a managed application - is never uninstalled, not now and not on
-any future rebuild. The test suite runs the step against a stand-in for `brew`
-and fails if it ever passes a flag that could uninstall, or if either of those
-two variables survives into Homebrew's environment.
+managed configuration profile, no rebuild asks Homebrew to remove software. The
+test suite runs the step against a stand-in for `brew` and fails if it ever
+passes a flag that could uninstall, or if either of those two variables survives
+into Homebrew's environment.
+
+That is a claim about what this repository asks for, and it is worth being exact
+about the difference between that and what Homebrew does on its own. Every
+`brew install` on this Mac - yours, typed by hand, or this one - finishes by
+checking whether a routine cleanup is due, and roughly monthly that cleanup runs
+`brew autoremove`. So a rebuild that installs something new can be the command
+that triggers it. That is Homebrew's standing maintenance on this machine rather
+than anything this configuration introduces, which is why the step leaves it
+alone: switching it off here would give this Mac a maintenance policy your other
+Macs do not have, and it would be reversing your own Homebrew setting to do it.
+
+Its reach is narrow, and the narrowness is the point. `autoremove` considers
+formulae only, never casks, and never a formula you installed on request - only
+ones that arrived as dependencies and are no longer needed by anything
+installed. Software you installed deliberately stays. If you would rather
+Homebrew never did this at all, that is a Homebrew setting, `HOMEBREW_NO_AUTOREMOVE`,
+and it is yours to set.
 
 There is one thing it *will* replace, and it is worth being exact about. The
 step passes `--force`, so a cask is allowed to claim whatever is already
@@ -61,13 +76,24 @@ sitting where it installs. For the two application casks on the list in
 `home.nix` - today WezTerm and Ghostty - that means an app of that name already
 in `/Applications` is replaced by Homebrew's copy, however it got there.
 
-The third, `claude-code`, installs no app: it puts a `claude` command on
-Homebrew's `bin` path, and `--force` does not overwrite for it. A symlink
-already there is only replaced when it points into that cask's own storage;
-anything else - a real file, or a link to something unrelated - makes the
-install refuse rather than clobber it, which fails the rebuild and keeps
-failing until you move the file aside yourself. Nothing whose name is not on
-that list is touched at all.
+Replacing an app is also the one thing that can make a password prompt appear
+mid-rebuild, and it is worth knowing why. This repository never runs `sudo` and
+never asks for a password itself. But Homebrew removes the app it is replacing,
+and if that app belongs to someone else - deployed by your employer's management
+software, owned by `root` - the plain removal fails, and Homebrew falls back to
+taking ownership with `sudo`, which prompts. So: a rebuild does not ask for your
+password, and a cask replacing an app you do not own can cause Homebrew to.
+
+The third cask, `claude-code`, installs no app: it puts a `claude` command on
+Homebrew's `bin` path, and there `--force` mostly does not overwrite. The exact
+rule, because it decides whether your rebuild stops or your file disappears. If
+something already sits at that path and it resolves to a real target, it is
+replaced only when it is a symlink pointing into that cask's own storage;
+anything else - a regular file, or a working link to something unrelated - makes
+the install refuse, which fails the rebuild and keeps failing until you move it
+aside yourself. The exception is a *broken* symlink: Homebrew tests whether the
+target exists, a dangling link answers no, and it is replaced silently. Nothing
+whose name is not on the cask list is touched at all.
 
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns

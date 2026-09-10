@@ -21,7 +21,9 @@
 #   Brewfile is written it applies the previous rebuild's package list; before
 #   the on-change hooks it can strand the font install permanently, because
 #   this is the one step that fails on an otherwise healthy machine;
-# - a Mac without Homebrew gets an explanation, not `brew: command not found`;
+# - a Mac without Homebrew gets an explanation, not `brew: command not found`,
+#   and gets it from bootstrap.sh's preflight before anything is installed as
+#   well as from the step itself;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
 # - the Brewfile lands inside the home directory, and lists what home.nix says.
@@ -45,7 +47,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 8
+dotfiles_test_expect 10
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -138,7 +140,8 @@ test_brewfile_lists_exactly_the_declared_formulae_and_casks() {
 # leaves the caller to decide what it means.
 #
 # The home directory is a temp root carrying a real copy of the generated
-# Brewfile, because the step refuses to run without one.
+# Brewfile, because that is the state activation hands the step: `linkGeneration`
+# has written it before this runs.
 #
 # Takes any number of NAME=VALUE pairs to export into the step's environment,
 # and hands the step nothing else. What a caller passes decides what the
@@ -414,6 +417,66 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
 # AGENTS.md carries the standing rule and the full list of paths a redirected
 # homeDirectory does not redirect.
 
+# --- and is told so before anything has been installed ------------------------
+#
+# The activation step's message arrives at the end of a switch. On a first
+# bootstrap that is too late to be useful: Nix has been installed, a password
+# has been asked for, and the home directory has been written. So bootstrap.sh
+# asks the same question up front, through lib/homebrew-present.sh, and these
+# two checks run that library directly rather than running bootstrap.sh - which
+# would install Nix.
+#
+# The library's rule has to be the same rule home.nix's step uses, or bootstrap
+# passes and the rebuild fails later. Both are exercised the same way here,
+# through HOMEBREW_PREFIX, which is what makes that comparison meaningful.
+
+test_the_preflight_refuses_a_mac_without_homebrew() {
+  local root output status=0
+
+  root=$(dotfiles_test_tmproot dotfiles-preflight-absent)
+  mkdir -p "$root/empty"
+
+  output=$(HOMEBREW_PREFIX="$root/empty" /bin/bash -c \
+    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_require' _ "$ROOT" 2>&1) \
+    || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the preflight accepted a machine with no Homebrew, so bootstrap.sh would install Nix and then fail"
+
+  # The same three things the activation step's message has to say, because a
+  # user who hits this one has to be told the same thing.
+  assert_contains "$output" "https://brew.sh" \
+    "the preflight does not say where Homebrew comes from"
+  assert_contains "$output" "./bootstrap.sh" \
+    "the preflight does not say what to do once Homebrew is installed"
+  assert_not_contains "$output" "command not found" \
+    "the preflight let the shell report a missing command instead of explaining"
+
+  pass "preflight: a Mac without Homebrew is refused before anything is installed"
+}
+
+test_the_preflight_accepts_a_mac_with_homebrew() {
+  local root output status=0
+
+  root=$(dotfiles_test_tmproot dotfiles-preflight-present)
+  mkdir -p "$root/prefix/bin"
+  # Never executed - the library asks whether the path is there, and must not
+  # run what it finds.
+  printf '#!/bin/sh\nexit 99\n' >"$root/prefix/bin/brew"
+  chmod +x "$root/prefix/bin/brew"
+
+  output=$(HOMEBREW_PREFIX="$root/prefix" /bin/bash -c \
+    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_require' _ "$ROOT" 2>&1) \
+    || status=$?
+
+  [ "$status" = 0 ] \
+    || fail "the preflight refused a machine that has Homebrew where HOMEBREW_PREFIX says (exit $status)"
+  assert_eq "$output" "$root/prefix/bin/brew" \
+    "the preflight did not report the brew it found"
+
+  pass "preflight: a Mac with Homebrew passes, and the brew is located not run"
+}
+
 # --- a Mac without Homebrew is told so ----------------------------------------
 
 test_a_missing_homebrew_fails_with_an_explanation() {
@@ -508,6 +571,8 @@ test_the_homebrew_step_installs_and_cannot_remove
 test_the_homebrew_step_does_not_touch_auto_update
 test_the_homebrew_step_neutralizes_the_cleanup_variables
 test_the_homebrew_step_runs_after_the_brewfile_is_written
+test_the_preflight_refuses_a_mac_without_homebrew
+test_the_preflight_accepts_a_mac_with_homebrew
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
 

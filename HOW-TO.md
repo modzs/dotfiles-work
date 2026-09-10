@@ -4,14 +4,24 @@ Task-shaped answers for the things you will actually want to do. For what this
 repository is and what it deliberately does not touch, read
 [README.md](README.md) first.
 
-Everything this repository runs runs as you, never as root. If `./bootstrap.sh`
-or `./rebuild.sh` ever asks for a password, something is wrong - stop and check
-what you are running. The one exception is `./bootstrap.sh`'s step 1, which
-installs Nix: that prompt comes from the Determinate installer it runs, not from
-this repo's own code, and it is the single sudo in the whole setup. Homebrew is
-the one thing this file asks you to install beforehand, and its installer asks
-for a password too - again its own, which is exactly why installing it is your
-decision rather than a step this repo takes for you.
+Everything this repository runs runs as you, never as root, and neither
+`./bootstrap.sh` nor `./rebuild.sh` asks you for a password in its own code.
+Two prompts can still appear, and both come from something this repo runs rather
+than from this repo:
+
+- `./bootstrap.sh` step 1 installs Nix, and the Determinate installer it runs
+  asks for a password. That is the single sudo in the whole setup, and the
+  script says so as it happens.
+- a rebuild can prompt if a cask on the list has to replace an application you
+  do not own - one your employer's management software deployed. Homebrew cannot
+  remove that as you, so it falls back to taking ownership with `sudo`. See
+  README.md, which is exact about when this happens.
+
+A password prompt from anywhere else means something is wrong - stop and check
+what you are running. Homebrew is the one thing this file asks you to install
+beforehand, and its installer asks for a password too - again its own, which is
+exactly why installing it is your decision rather than a step this repo takes
+for you.
 
 ---
 

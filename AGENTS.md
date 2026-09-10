@@ -28,17 +28,32 @@ What follows from it, and still holds without exception - this repo must never:
 - **install, update or remove Homebrew itself**, or any other system-wide
   package manager. Homebrew is the user's, installed by hand; this repo finds it
   and fails with an explanation when it is absent;
-- **remove anything Homebrew installed.** There is no `cleanup`, no `--zap`, no
-  `brew uninstall`, and there must never be one. On this machine Homebrew is the
-  user's general-purpose package manager, so a declarative cleanup would delete
-  software installed by hand for reasons this repo knows nothing about - a
-  security agent among them. This is the single most dangerous change anyone
-  could make here;
+- **ask Homebrew to remove anything.** There is no `cleanup`, no `--zap`, no
+  `brew uninstall`, and there must never be one; the step also unsets the two
+  `HOMEBREW_BUNDLE_*_CLEANUP` variables, which exist only to turn a bundle
+  install destructive. On this machine Homebrew is the user's general-purpose
+  package manager, so a declarative cleanup would delete software installed by
+  hand for reasons this repo knows nothing about - a security agent among them.
+  This is the single most dangerous change anyone could make here.
+  State it as "asks for", not as "nothing is ever removed": every `brew install`
+  ends with Homebrew's own periodic cleanup, which about monthly runs
+  `autoremove`, so a rebuild that installs something can be the command that
+  triggers it. That is Homebrew's standing behaviour on the user's own machine,
+  it reaches only unrequested formula dependencies and never casks, and it is
+  deliberately left alone - suppressing it would reverse a Homebrew preference
+  of the user's, the same overreach as clearing `HOMEBREW_NO_AUTO_UPDATE`. The
+  two `_CLEANUP` variables are different in kind, which is why those are unset;
 - manage other user accounts, sudoers, sshd, or PAM;
-- require `sudo` for a rebuild. Installing Nix is the one and only `sudo`, and
-  `bootstrap.sh` is the only place it happens - and it happens inside the
-  Determinate installer, not in this repo's own code. Installing Homebrew needs
-  a password too, which is exactly why this repo does not do it.
+- run `sudo`, or prompt for a password, in any of its own code. Installing Nix
+  is the one and only `sudo`, `bootstrap.sh` is the only place it happens, and
+  it happens inside the Determinate installer rather than here. Installing
+  Homebrew needs a password too, which is exactly why this repo does not do it.
+  One thing this repo drives can still produce a prompt, and the claim has to be
+  stated that way rather than as "a rebuild never asks": `--force` lets a cask
+  replace an app already in `/Applications`, and when that app is owned by
+  someone else Homebrew falls back to `sudo` to take ownership before removing
+  it. That is Homebrew asking, in a step this repo asked for - so the promise is
+  that nothing here runs `sudo` itself, not that no prompt can ever appear;
 
 The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
@@ -48,7 +63,10 @@ invokes `brew` or carries a Homebrew installer URL in its text, or if the built
 artifact embeds a Homebrew path other than the two an existing `brew` lives at.
 Both that check and the privilege one tokenize rather than grep, so *explaining*
 Homebrew or `sudo` in a comment is fine and several of these scripts do;
-invoking one is what fails. `tests/homebrew.test.sh` runs the Homebrew step
+invoking one is what fails. The Homebrew one goes further and looks at position,
+so naming a path is allowed and only a command word counts - `lib/homebrew-present.sh`
+has to ask whether `/opt/homebrew/bin/brew` exists. It is run against fixture
+scripts with known answers, so narrowing it cannot quietly turn it into a no-op. `tests/homebrew.test.sh` runs the Homebrew step
 against a recording stand-in for `brew` and fails if it passes anything that
 could uninstall or upgrade, if it lets either Homebrew cleanup variable through
 from the environment, if a missing Homebrew produces a raw error rather than an

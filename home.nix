@@ -124,11 +124,6 @@ let
       exit 1
     fi
 
-    if [ ! -e "$brewfile" ]; then
-      echo "dotfiles-work: no Brewfile at $brewfile - the switch that writes it did not run" >&2
-      exit 1
-    fi
-
     # `install` and nothing else. There is deliberately no `cleanup`, no
     # `--cleanup`, no `--force-cleanup`, no `--zap` and no `--global`: on this
     # machine Homebrew is the user's own general-purpose package manager, and a

@@ -52,7 +52,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 7
+dotfiles_test_expect 8
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -265,6 +265,79 @@ PY
   pass "scripts: no tracked shell script runs sudo or any other privilege escalation"
 }
 
+# Write the Homebrew-invocation scanner to a temp file and print its path.
+# Split out from its caller so the checker itself can be run against fixture
+# scripts whose answer is known - a scanner that has never been shown a real
+# invocation is a scanner nobody has tested.
+dotfiles_write_brewscan() {
+  local script
+  script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-brewscan.XXXXXX") \
+    || fail "could not create a temp file for the tokenizer"
+  cat >"$script" <<'SCAN'
+import shlex, sys
+
+# The contract is that no script this repo runs may INVOKE Homebrew. Naming its
+# path is a different act and a legitimate one: lib/homebrew-present.sh has to
+# ask whether /opt/homebrew/bin/brew exists, because bootstrap.sh must turn a
+# Mac without Homebrew away before it installs Nix. A check that cannot tell
+# `[ -x /opt/homebrew/bin/brew ]` from running brew was asserting the wrong
+# thing, so this one looks at POSITION: a token whose basename is `brew` is a
+# problem when it is the command word, and unremarkable when it is an argument.
+#
+# An explicit separator token is inserted after each newline first. shlex treats
+# a newline as ordinary whitespace, so without this the first word of every line
+# would look like an argument to the line before it and a `brew install` on its
+# own line would be missed entirely.
+#
+# The newline itself is KEPT, and that is not incidental: shlex ends a comment
+# at a newline, so replacing newlines rather than following them makes the first
+# `#` in a file swallow the whole file as one comment. That yields zero tokens
+# and a scanner that cheerfully passes anything - which is exactly what happened
+# here, and why the fixture check below exists.
+BANNED = {"brew"}
+# What can precede a command word. `in` is deliberately absent: in `for x in
+# LIST` and `case x in` what follows is a word list, so treating it as a
+# separator would flag the path-existence loop this check exists to permit.
+SEPARATORS = {
+    "\n", ";", ";;", "|", "||", "&", "&&", "(", ")", "{", "}",
+    "then", "else", "elif", "do", "!", "time",
+}
+INSTALLERS = (
+    "raw.githubusercontent.com/homebrew",
+    "homebrew/install",
+    "github.com/homebrew/brew",
+)
+
+NEWLINE = "\x00NL\x00"
+
+problems = []
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    lexer = shlex.shlex(source.replace("\n", "\n %s " % NEWLINE),
+                        posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = [("\n" if t == NEWLINE else t) for t in lexer]
+    except ValueError as error:
+        problems.append("%s: could not be tokenized (%s)" % (path, error))
+        continue
+    previous = "\n"
+    for token in tokens:
+        if token.rsplit("/", 1)[-1] in BANNED and previous in SEPARATORS:
+            problems.append("%s: runs %r" % (path, token))
+        previous = token
+    lowered = source.lower()
+    for installer in INSTALLERS:
+        if installer in lowered:
+            problems.append("%s: names the Homebrew installer (%r)" % (path, installer))
+
+print("\n".join(problems))
+SCAN
+
+  printf '%s\n' "$script"
+}
+
 # --- nothing here installs, updates or removes Homebrew itself ----------------
 
 test_nothing_here_installs_homebrew() {
@@ -293,6 +366,15 @@ test_nothing_here_installs_homebrew() {
   # these scripts have to be free to *explain* Homebrew in a comment, and a
   # word in a comment is not a command.
   #
+  # The rule is INVOCATION, not mention, and the distinction is load bearing
+  # rather than pedantic: lib/homebrew-present.sh has to test whether
+  # /opt/homebrew/bin/brew exists so bootstrap.sh can turn a Mac without
+  # Homebrew away before installing Nix. Asking whether a path exists is not
+  # running the program at it, and a check that conflated the two would have
+  # forced that preflight to be written obscurely to get past its own suite.
+  # test_the_homebrew_scan_tells_an_invocation_from_a_path_test proves the
+  # narrowed rule still catches the thing it is for.
+  #
   # This does read implementation source, and that has been raised and settled.
   # It is not the anti-pattern the rest of this suite avoids, and the line
   # between them is what the source is being asked to stand for. A test that
@@ -303,43 +385,8 @@ test_nothing_here_installs_homebrew() {
   # itself, not evidence about something else. That is why the pre-existing
   # sudo check above already works this way, and why both go through a real
   # shell tokenizer instead of a grep.
-  script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-brewscan.XXXXXX") \
-    || fail "could not create a temp file for the tokenizer"
-  cat >"$script" <<'SCAN'
-import shlex, sys
-
-# Every spelling that would run Homebrew, plus the ways its own installer is
-# fetched. The installer is looked for in the raw source as well as in the
-# tokens, because a copy-pasteable install line sitting in a comment is a step
-# someone will follow.
-BANNED = {"brew"}
-INSTALLERS = (
-    "raw.githubusercontent.com/homebrew",
-    "homebrew/install",
-    "github.com/homebrew/brew",
-)
-
-problems = []
-for path in sys.argv[1:]:
-    with open(path, encoding="utf-8") as fh:
-        source = fh.read()
-    lexer = shlex.shlex(source, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    try:
-        tokens = list(lexer)
-    except ValueError as error:
-        problems.append("%s: could not be tokenized (%s)" % (path, error))
-        continue
-    for token in tokens:
-        if token in BANNED or token.rsplit("/", 1)[-1] in BANNED:
-            problems.append("%s: runs %r" % (path, token))
-    lowered = source.lower()
-    for installer in INSTALLERS:
-        if installer in lowered:
-            problems.append("%s: names the Homebrew installer (%r)" % (path, installer))
-
-print("\n".join(problems))
-SCAN
+  script=$(dotfiles_write_brewscan) \
+    || fail "could not write the Homebrew-invocation scanner"
 
   report=$(dotfiles_tracked_except "$(dotfiles_test_self)" \
     bootstrap.sh rebuild.sh 'lib/*.sh' \
@@ -351,6 +398,63 @@ SCAN
     || fail "a script this repo runs reaches for Homebrew, which only home.nix may: $report"
 
   pass "scripts: nothing here installs, updates or removes Homebrew itself"
+}
+
+test_the_homebrew_scan_tells_an_invocation_from_a_path_test() {
+  local script root report status=0
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "Homebrew scanner behaviour check (python3 not found)"
+    return 0
+  fi
+
+  # The check above passes when it finds nothing, which is also what a broken
+  # scanner does. So the scanner is run here against two fixtures whose answer
+  # is known in advance: one that really invokes Homebrew and must be flagged,
+  # one that only asks whether its path exists and must not be. Without this,
+  # narrowing the rule could have quietly turned the check into a no-op and the
+  # suite would have gone on printing ok.
+  script=$(dotfiles_write_brewscan) \
+    || fail "could not write the Homebrew-invocation scanner"
+  root=$(dotfiles_test_tmproot dotfiles-brewscan-fixtures)
+
+  cat >"$root/invokes.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+# A convenience someone might add: install the prerequisite for the user.
+if ! command -v nix >/dev/null 2>&1; then
+  brew install nix
+fi
+/opt/homebrew/bin/brew bundle install --file "$HOME/Brewfile"
+FIXTURE
+
+  cat >"$root/probes.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+# What lib/homebrew-present.sh does: a path question, never a command.
+for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  if [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+done
+FIXTURE
+
+  report=$(python3 "$script" "$root/invokes.sh") || status=$?
+  [ "$status" = 0 ] || fail "the scanner could not tokenize the invoking fixture"
+  assert_contains "$report" "invokes.sh" \
+    "the scanner did not flag a script that runs \`brew install\` - it would pass anything"
+  # Both spellings, because a bare command word and an absolute path in command
+  # position are the two ways this could arrive.
+  assert_contains "$report" "'brew'" \
+    "the scanner did not flag a bare \`brew\` command word"
+  assert_contains "$report" "'/opt/homebrew/bin/brew'" \
+    "the scanner did not flag an absolute brew path used as a command"
+
+  report=$(python3 "$script" "$root/probes.sh") || status=$?
+  rm -f "$script"
+  [ "$status" = 0 ] || fail "the scanner could not tokenize the probing fixture"
+  [ -z "$report" ] \
+    || fail "the scanner flagged a path existence test as an invocation: $report"
+
+  pass "scripts: the Homebrew scan flags an invocation and allows a path test"
 }
 
 # --- the only Homebrew the artifact knows about is an existing one ------------
@@ -373,17 +477,43 @@ test_the_only_homebrew_paths_are_the_two_prefixes() {
   # than just asking its `brew` to install a Brewfile.
   #
   # This checks the built artifact, not the source: a path in a comment is not
-  # a path the machine follows. Two artifacts, because the activation package
-  # holds the generation tree and the activate script while the Homebrew step
-  # is its own store path referenced from it - grepping the generation alone
-  # would look at everything except the file that does the reaching.
+  # a path the machine follows. Three things are in scope - the activate script,
+  # the generated home-files tree, and the Homebrew step, which is its own store
+  # path referenced from the activate script rather than a file inside the
+  # generation.
+  #
+  # Enumerated with `find -L` rather than left to `grep -r`, and that is a bug
+  # fix, not a style choice. In a built generation `home-files`, `home-path` and
+  # `LaunchAgents` are symlinks into the store, and BSD grep does not follow a
+  # symlink it meets while recursing - neither -r nor -R does, only -S, which is
+  # not a GNU grep flag and so not portable enough to rely on here. So
+  # `grep -r "$generation"` read only `activate`, `bin/` and three small text
+  # files, and reported ok for a scope it had never opened. home-files is
+  # exactly where a regression would land: a future `home.file` whose text
+  # embeds a Cellar path or a `brew shellenv` line lands there.
+  #
+  # home-path is deliberately NOT in scope. It is the nixpkgs package closure,
+  # not this repository's output. A Homebrew path inside some upstream package
+  # is a fact about that package and not evidence that this configuration
+  # reaches into Homebrew, so scanning it would produce hits nobody here can act
+  # on - the fastest way to teach someone to ignore this check.
   generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
   script=$(dotfiles_brew_bundle_script "$generation") \
     || fail "the activation script does not run a Homebrew step at all"
 
-  hits=$(grep -r -o -h -E '/opt/homebrew[A-Za-z0-9_./-]*|/usr/local/(Homebrew|Cellar|Caskroom)[A-Za-z0-9_./-]*|/usr/local/bin/brew' \
-    "$generation" "$script" 2>/dev/null | sort -u || true)
+  # What stops the scope from narrowing again in silence. The generated Brewfile
+  # lives under home-files and this suite knows it is there, so a traversal that
+  # cannot reach it is not reading what this check claims to read - and a check
+  # that can go quiet is the failure being fixed here, not a smaller version of
+  # it.
+  find -L "$generation/activate" "$generation/home-files" "$script" -type f -print 2>/dev/null \
+    | grep -q -F "/home-files/.config/dotfiles/Brewfile" \
+    || fail "the artifact scan never reached the generated Brewfile, so it is reading less than it claims"
+
+  hits=$(find -L "$generation/activate" "$generation/home-files" "$script" -type f -print0 2>/dev/null \
+    | xargs -0 grep -o -h -E '/opt/homebrew[A-Za-z0-9_./-]*|/usr/local/(Homebrew|Cellar|Caskroom)[A-Za-z0-9_./-]*|/usr/local/bin/brew' \
+    2>/dev/null | sort -u || true)
 
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
@@ -416,6 +546,7 @@ test_every_managed_file_target_is_inside_home
 test_home_directory_matches_the_declared_one
 test_no_tracked_script_escalates_privileges
 test_nothing_here_installs_homebrew
+test_the_homebrew_scan_tells_an_invocation_from_a_path_test
 test_the_only_homebrew_paths_are_the_two_prefixes
 
 test_summary
