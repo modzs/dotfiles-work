@@ -11,9 +11,13 @@ you cannot easily repair and are not free to reconfigure.
 
 This is the whole point of the repository, so it comes first.
 
-**It writes inside your home directory. That is all it writes.**
+There are two separate things here, and the honest answer is different for
+each: **this configuration**, which is everything in this repository, and
+**installing Nix**, which `bootstrap.sh` hands to a third-party installer once.
 
-| It does | It does not |
+### This configuration writes inside your home directory. That is all it writes.
+
+| This configuration does | This configuration does not |
 | --- | --- |
 | Install command-line tools and two terminal apps for your account | Install a system-wide package manager, or remove software someone else installed |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Write to `/etc`, `/Library`, `/usr`, `/opt`, or `/Applications` |
@@ -27,14 +31,36 @@ system-domain macOS defaults, or manage other user accounts - because it is a
 configuration and those settings do not exist in it. `tests/safety.test.sh`
 asserts that mechanically, so a future change cannot quietly reintroduce them.
 
-The one thing that lives outside your home directory is Nix itself, in `/nix`.
-Installing it is the single `sudo` this repo ever needs, and after that the
-store, your profile generations and everything else Nix does for you belong to
-your account.
+### Installing Nix is a system-level install, and it does write outside `$HOME`
 
-> **Check with your employer before installing anything.** "It only touches my
-> home directory" is a technical statement about this configuration, not
-> permission to install software on a machine your employer owns.
+This is the one step `bootstrap.sh` does not do itself. It runs the
+[Determinate Systems installer](https://install.determinate.systems), once, and
+that is the single `sudo` in the whole setup. Nothing in this repository can do
+any of the following; the installer does, and it is worth knowing before you
+show this repo to whoever administers your Mac:
+
+| Path | What it is |
+| --- | --- |
+| `/nix`, on its own APFS volume | the Nix store: every package installed for your account |
+| `/etc/nix/` | the daemon's configuration |
+| `/etc/synthetic.conf` | the entry that lets `/nix` exist at the root of the disk |
+| `/Library/LaunchDaemons/systems.determinate.*.plist` | the build daemon that runs in the background |
+| a block appended to `/etc/zshrc` and `/etc/bashrc` | what puts `nix`, and the tools this configuration installs, on the `PATH` of new shells |
+
+So "it only touches my home directory" is true of the configuration and not of
+installing Nix. After the install, the store, your profile generations and
+everything else Nix does for you belong to your account, and nothing else on
+the machine is touched again.
+
+That last row is the one to remember on a managed Mac: the `/etc/zshrc` block
+is what makes any of this reachable from a shell, and it is a system file this
+repository will never write to. `bootstrap.sh` checks whether a fresh login
+shell can actually find what it just installed, and says so plainly when it
+cannot - it can tell you where to look, and it cannot fix it for you.
+
+> **Check with your employer before installing anything.** The paragraphs above
+> are technical statements about what runs, not permission to install software
+> on a machine your employer owns.
 
 ## What you get
 

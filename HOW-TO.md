@@ -11,15 +11,45 @@ a password, something is wrong - stop and check what you are running.
 
 ## Set it up on a new Mac
 
+### What you get, and what you do not
+
+Read this first if you have ever set up a Mac with a personal dotfiles repo,
+because the shape is different and the difference looks like failure.
+
+**You get** `zsh` with a starship prompt, neovim, git, `ripgrep`, `fd`, `fzf`,
+`jq`, `lazygit`, `gh`, `claude-code`, Node, the Hack Nerd Font, and the WezTerm
+and Ghostty terminal emulators. Everything comes from nixpkgs, pinned by
+`flake.lock`.
+
+**You do not get Homebrew.** This repository never installs a system package
+manager and never will - that is the whole reason it is separate from a
+personal dotfiles repo. `brew list` will stay empty, and nothing here depends
+on it.
+
+Three things follow from that, and all three are normal:
+
+| You look here | You find | Because |
+| --- | --- | --- |
+| `/Applications` | nothing | the two terminal apps go to `~/Applications/Home Manager Apps` |
+| Spotlight, ⌘-Space | nothing | those apps are symlinks, which Spotlight does not index |
+| the shell you just ran `bootstrap.sh` in | nothing | Nix only reaches shells started afterwards |
+
+`ls ~/.nix-profile/bin` and `ls ~/Applications/Home\ Manager\ Apps` are the two
+commands that show you what really got installed. `bootstrap.sh` prints both
+when it finishes.
+
+### The setup
+
 ```sh
 git clone https://github.com/modzs/dotfiles-work.git ~/.dotfiles
 cd ~/.dotfiles
 ./bootstrap.sh
 ```
 
-Then open a new terminal. The Nix installer only adds `nix` to the `PATH` of
-shells started after it ran, so the shell you bootstrapped from will not have
-the new tools.
+**Then open a new terminal, before you run anything else.** The Nix installer
+only adds `nix` to the `PATH` of shells started after it ran, so the shell you
+bootstrapped from has neither `nix` nor any of the new tools - and `./rebuild.sh`
+will refuse to run there. This catches nearly everyone once.
 
 `bootstrap.sh` is safe to run twice. Every step checks the machine's current
 state first and skips what is already done.

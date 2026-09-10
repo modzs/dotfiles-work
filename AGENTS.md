@@ -37,6 +37,22 @@ documents that seam.
 
 ## Working here
 
+- **A script refuses before it writes, and ends on the truth.** Both entry
+  points check everything that can refuse - the account and home directory,
+  `nix` on PATH, `~/.dotfiles` - before anything is repointed or built, and
+  neither may end a failed run on friendly advice. `rebuild.sh` once printed
+  seven reassuring lines about git identity underneath `nix: command not
+  found`, so a run that installed nothing read like a run that worked, and it
+  repointed `~/.dotfiles` at a configuration it then refused.
+  `tests/rebuild.test.sh` runs the script end to end against a scratch `HOME`
+  with the switch stubbed, and holds both properties.
+- **A successful run has to be legible.** `lib/install-report.sh` is what
+  `bootstrap.sh` says at the end, and `tests/install-report.test.sh` drives it
+  directly. Nothing this repo writes puts the profile on `PATH` - a line the
+  Nix installer adds to `/etc/zshrc` does - so the report probes what a fresh
+  login shell would really see and warns when it would see nothing. It names
+  that file and never writes to it; a check that cannot answer must read as
+  unverified, never as fine.
 - **Never activate a configuration while testing.** `nix flake check`,
   `nix build .#default` and `nix eval` are safe; `home-manager switch`,
   `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
