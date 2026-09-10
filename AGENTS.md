@@ -37,10 +37,14 @@ documents that seam.
 
 ## Working here
 
-- **A script refuses before it writes, and ends on the truth.** Both entry
-  points check everything that can refuse - the account and home directory,
-  `nix` on PATH, `~/.dotfiles` - before anything is repointed or built, and
-  neither may end a failed run on friendly advice. `rebuild.sh` once printed
+- **A script refuses before it writes, and ends on the truth.** `rebuild.sh`
+  checks everything that can refuse - the account and home directory, `nix` on
+  PATH, `~/.dotfiles` - before anything is repointed or built. `bootstrap.sh`
+  runs in a different order on purpose: it repoints `~/.dotfiles` at step 2 and
+  only checks the account and home directory afterwards, with the nix-on-PATH
+  guard later still, because the interactive personalize steps in between are
+  what make that check pass. Neither may end a failed run on friendly advice.
+  `rebuild.sh` once printed
   seven reassuring lines about git identity underneath `nix: command not
   found`, so a run that installed nothing read like a run that worked, and it
   repointed `~/.dotfiles` at a configuration it then refused.

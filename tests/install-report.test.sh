@@ -86,6 +86,8 @@ test_the_report_says_what_was_installed_and_where() {
 
   # The count is read off the profile, so it is a number the user can check
   # with the very command the report gives them.
+  assert_contains "$output" "==> Done." \
+    "the report supplies the closing verdict, and here it is a good one"
   assert_contains "$output" "holds 3 command-line tools" \
     "the report should say how many tools the profile really carries"
   # shellcheck disable=SC2088  # a literal to find in the report's text, not a path to expand
@@ -125,8 +127,14 @@ test_an_empty_profile_is_reported_as_a_broken_install() {
     "the report must not read as a successful install of nothing"
   assert_not_contains "$output" "Checked: a new login shell does find them" \
     "the report must not confirm reachability of tools that do not exist"
-  assert_contains "$output" "bootstrap.sh again" \
-    "the report should say what to do about it"
+  assert_not_contains "$output" "==> Done." \
+    "an empty profile must not be stamped as a finished run"
+  # What to do about it has to be something that works from here. This shell
+  # has no nix on its PATH - bootstrap.sh sourced the Determinate profile into
+  # its own process only - so re-running bootstrap.sh restarts the Nix
+  # installer rather than the switch.
+  assert_contains "$output" "Open a new terminal, then run ./rebuild.sh" \
+    "the report should say what actually works from here"
 
   pass "report: an empty or missing profile reads as a broken install"
 }

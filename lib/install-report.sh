@@ -147,18 +147,24 @@ install_report() {
   # directory exists, so it would go on to confirm a new terminal finds tools
   # that are not there.
   if [ "$count" = 0 ]; then
+    printf '==> Not done: nothing is installed.\n'
     printf '%sWARNING: ~/.nix-profile/bin is empty or missing, so this account\n' "$indent"
     printf '%shas no command-line tools from this configuration - even though\n' "$indent"
     printf '%sthe switch above reported success. Something is wrong; this run\n' "$indent"
     printf '%sis not finished.\n' "$indent"
     printf '\n'
-    printf '%sLook at what is really there, then run ./bootstrap.sh again:\n' "$indent"
-    printf '%s  ls -la ~/.nix-profile/bin\n' "$indent"
+    printf '%sThis shell cannot see nix - Nix only adds itself to shells that\n' "$indent"
+    printf '%sstart after it was installed - so the retry has to happen in a\n' "$indent"
+    printf '%snew one.\n' "$indent"
     printf '\n'
-    printf '%sThe Troubleshooting section of HOW-TO.md covers what comes up.\n' "$indent"
+    printf '%s  ==> Open a new terminal, then run ./rebuild.sh from there.\n' "$indent"
+    printf '\n'
+    printf '%sWhat is really in the profile, from that new terminal:\n' "$indent"
+    printf '%s  ls -la ~/.nix-profile/bin\n' "$indent"
     return 0
   fi
 
+  printf '==> Done.\n'
   printf '%s~/.nix-profile/bin now holds %s command-line tools, and WezTerm and\n' "$indent" "$count"
   printf '%sGhostty are in ~/Applications/Home Manager Apps.\n' "$indent"
   printf '\n'

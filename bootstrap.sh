@@ -144,7 +144,7 @@ git_identity_report "    "
 # across ~/.nix-profile/bin and ~/Applications, none of it is visible from the
 # shell this ran in, and a user who came from a personal dotfiles repo will go
 # looking in /Applications and in `brew list` and find nothing in either. All
-# three are expected states, and the moment to say so is here. See
-# lib/install-report.sh.
-echo "==> Done."
+# three are expected states, and the moment to say so is here. The closing
+# headline is the report's too: it is what knows whether anything landed, and
+# it prints "==> Done." only when something did. See lib/install-report.sh.
 install_report "    "
