@@ -54,9 +54,11 @@ the machine is touched again.
 
 That last row is the one to remember on a managed Mac: the `/etc/zshrc` block
 is what makes any of this reachable from a shell, and it is a system file this
-repository will never write to. `bootstrap.sh` checks whether a fresh login
-shell can actually find what it just installed, and says so plainly when it
-cannot - it can tell you where to look, and it cannot fix it for you.
+repository will never write to. `bootstrap.sh` and `rebuild.sh` both check
+whether a fresh login shell can actually find what is installed, and say so
+plainly when it cannot - they can tell you where to look, and they cannot fix
+it for you. If management software has dropped that block, the repair that is
+yours to make is a `PATH` line in `~/.zshrc.local`, below.
 
 > **Check with your employer before installing anything.** The paragraphs above
 > are technical statements about what runs, not permission to install software
@@ -120,6 +122,16 @@ npm config set registry https://registry.example.invalid/
 intercept TLS, and without it every HTTPS request from Node - `npm install`
 included - fails with a certificate error. This repo does not set it, because
 the correct value is a path only your machine knows.
+
+This file is also where the `PATH` repair goes if the Nix block has gone
+missing from `/etc/zshrc` and you cannot put it back:
+
+```sh
+export PATH="$HOME/.nix-profile/bin:$PATH"
+```
+
+Both scripts source this file when they check reachability, so a fix here is
+recognised rather than warned about.
 
 ### `~/.gitconfig.local` and `~/.gitconfig.work`
 

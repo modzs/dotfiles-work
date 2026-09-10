@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# lib/install-report.sh - what bootstrap.sh says once the switch has succeeded.
+# lib/install-report.sh - what a script says once its switch has succeeded.
 #
-# Sourced by bootstrap.sh. It lives here rather than inline so that
+# Sourced by bootstrap.sh, which ends on the full report, and by rebuild.sh,
+# which ends on the shorter install_report_rebuild_verdict at the bottom of
+# this file. It lives here rather than inline so that
 # tests/install-report.test.sh can drive it against a scratch home, because
 # this is the only thing a first-time user reads and it is easy to get wrong in
 # a way no build failure would ever catch.
@@ -57,9 +59,10 @@ install_report_tool_count() {
 #
 # Two things make this honest rather than decorative:
 #
-# - `env -i` and an explicit system PATH. bootstrap.sh reaches this point with
-#   nix on its OWN PATH, because step 1 sourced the Determinate profile script
-#   into this process. Inheriting that would make the probe agree that all is
+# - `env -i` and an explicit system PATH. Both callers reach this point with
+#   nix on their OWN PATH - bootstrap.sh because step 1 sourced the Determinate
+#   profile script into this process, rebuild.sh because it refuses to run
+#   without it at all. Inheriting that would make the probe agree that all is
 #   well about the exact thing it exists to doubt.
 # - `zsh -f`, then sourcing the startup files explicitly. This runs the system
 #   files and the user files that legitimately set PATH; it deliberately does

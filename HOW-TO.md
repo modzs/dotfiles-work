@@ -16,10 +16,9 @@ a password, something is wrong - stop and check what you are running.
 Read this first if you have ever set up a Mac with a personal dotfiles repo,
 because the shape is different and the difference looks like failure.
 
-**You get** `zsh` with a starship prompt, neovim, git, `ripgrep`, `fd`, `fzf`,
-`jq`, `lazygit`, `gh`, `claude-code`, Node, the Hack Nerd Font, and the WezTerm
-and Ghostty terminal emulators. Everything comes from nixpkgs, pinned by
-`flake.lock`.
+**You get** everything in README's [What you get](README.md#what-you-get) - a
+configured shell and editor, git, two terminal emulators and a handful of
+command-line tools. All of it comes from nixpkgs, pinned by `flake.lock`.
 
 **You do not get Homebrew.** This repository never installs a system package
 manager and never will - that is the whole reason it is separate from a
@@ -248,6 +247,9 @@ file it wants to own. `bootstrap.sh` passes `-b backup`, which renames it to
 file aside yourself and run it again.
 
 **`nix: command not found` right after bootstrapping** - open a new terminal.
+If a new terminal still cannot find it, the Nix block is missing from
+`/etc/zshrc`; see [README.md](README.md#what-this-touches-and-what-it-does-not)
+for what to do about that on a Mac you do not administer.
 
 **A package will not build** - check that it exists for macOS and for your
 architecture; see "Add or remove a tool" above.
