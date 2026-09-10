@@ -34,28 +34,35 @@ rather than claiming a containment that no longer holds.
 
 | This configuration does | This configuration does not |
 | --- | --- |
-| Install command-line tools for your account from Nix, inside your home directory | Write to `/etc`, `/Library`, `/usr`, `/private`, or any macOS system domain |
+| Install command-line tools for your account from Nix, inside your home directory | Write to `/etc`, `/private`, or any macOS system domain, by any means. Write anywhere outside your home directory *other than* by asking an existing Homebrew to install what the list holds - on Intel that prefix is `/usr/local`, and casks land in `/Applications` |
 | Ask an existing Homebrew to install a fixed list of formulae and casks | Install, update, or remove Homebrew itself - though Homebrew may still auto-update itself when asked to install, see below |
-| Add to what Homebrew has installed | Uninstall *anything* - see below |
+| Add to what Homebrew has installed | Uninstall *anything*, or let the environment ask it to - see below |
 | Write config files under `~/.config`, `~/.zshrc`, `~/Applications` | Change the computer's name, network settings, or macOS system settings |
 | Ask for your password **once**, to install Nix | Ask for your password ever again |
 
 Three of those deserve to be spelled out.
 
 **It never uninstalls anything.** Homebrew's "bundle" mechanism can be run in a
-mode that uninstalls whatever is not on the list. This configuration does not
-run it that way and has no option to. Software installed on this Mac by anyone,
-for any reason - a security agent, a VPN client, a managed application - is
-never uninstalled, not now and not on any future rebuild. The test suite runs
-the step against a stand-in for `brew` and fails if it ever passes a flag that
-could uninstall.
+mode that uninstalls whatever is not on the list. This configuration passes no
+flag that asks for it, and it goes one step further: that mode can also be
+turned on from the environment, by `HOMEBREW_BUNDLE_INSTALL_CLEANUP` or
+`HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP`, so the step unsets both before it runs
+Homebrew. Whatever is exported on the machine, in a shell profile or by a
+managed configuration profile, it cannot make a rebuild uninstall anything.
+Software installed on this Mac by anyone, for any reason - a security agent, a
+VPN client, a managed application - is never uninstalled, not now and not on
+any future rebuild. The test suite runs the step against a stand-in for `brew`
+and fails if it ever passes a flag that could uninstall, or if either of those
+two variables survives into Homebrew's environment.
 
 There is one thing it *will* replace, and it is worth being exact about. The
-step passes `--force`, so a cask is allowed to claim an application already
-sitting at the path it installs to. That means an app whose name is on the cask
-list in `home.nix` - today WezTerm, Ghostty and Claude Code - is replaced by
-Homebrew's copy if it is already in `/Applications`, however it got there.
-Nothing whose name is not on that list is touched at all.
+step passes `--force`, so a cask is allowed to claim whatever is already
+sitting where it installs. For the two application casks on the list in
+`home.nix` - today WezTerm and Ghostty - that means an app of that name already
+in `/Applications` is replaced by Homebrew's copy, however it got there. The
+third, `claude-code`, installs no app: what it can overwrite is a `claude`
+executable on Homebrew's `bin` path. Nothing whose name is not on that list is
+touched at all.
 
 **It never installs Homebrew.** Homebrew's own installer needs a password and
 writes outside the home directory, so running it is a decision for whoever owns
@@ -229,10 +236,14 @@ which file git is actually using.
 
 ### Where the applications go
 
-WezTerm, Ghostty and Claude Code are Homebrew casks, so they install into
-`/Applications` exactly like any application you download yourself. Spotlight
-indexes them, `open -a WezTerm` works, and they appear in the Dock and in
-Launchpad without anything special being done to them.
+WezTerm and Ghostty are application casks, so they install into `/Applications`
+exactly like any application you download yourself. Spotlight indexes them,
+`open -a WezTerm` works, and they appear in the Dock and in Launchpad without
+anything special being done to them.
+
+Claude Code is a cask too, but not an application one: it installs a single
+`claude` executable onto Homebrew's `bin` path. Look for it in a terminal, not
+in Launchpad - there is no bundle for Spotlight or the Dock to find.
 
 That was not true of the arrangement this replaced, where they came from Nix and
 were symlinked into `~/Applications/Home Manager Apps`. Symlinked bundles launch

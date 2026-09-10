@@ -8,17 +8,21 @@
 # prose - README.md and AGENTS.md say what the rules are; these checks are what
 # holds the code to them.
 #
-# Five properties, in order of how much damage getting them wrong would do:
+# Six properties, in order of how much damage getting them wrong would do:
 #
-# - the step never removes anything. Homebrew on this machine is the user's own
-#   general-purpose package manager, and the setup this repo replaces drove it
-#   with `cleanup = "zap"`, which uninstalls whatever the Brewfile does not
-#   list. Software installed by hand for unrelated reasons - an employer's
-#   security agent included - must survive every rebuild;
-# - the step runs last. Before the Brewfile is written it applies the previous
-#   rebuild's package list; before the on-change hooks it can strand the font
-#   install permanently, because this is the one step that fails on a normal
-#   machine;
+# - the step never removes anything, and cannot be talked into it. Homebrew on
+#   this machine is the user's own general-purpose package manager, and the
+#   setup this repo replaces drove it with `cleanup = "zap"`, which uninstalls
+#   whatever the Brewfile does not list. Software installed by hand for
+#   unrelated reasons - an employer's security agent included - must survive
+#   every rebuild. That means passing no cleanup flag AND refusing the two
+#   environment variables that turn a cleanup on without one;
+# - the step runs after everything that writes the home directory. Before the
+#   Brewfile is written it applies the previous rebuild's package list; before
+#   the on-change hooks it can strand the font install permanently, because
+#   this is the one step that fails on an otherwise healthy machine;
+# - a failed step leaves nothing permanently broken, which is the outcome the
+#   ordering exists to protect;
 # - a Mac without Homebrew gets an explanation, not `brew: command not found`;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
@@ -26,9 +30,11 @@
 #
 # The step is exercised by running it, with a recording stand-in for `brew`.
 # Asserting on its source text would prove that the words are there; running it
-# proves what it does with them. The one check that cannot work that way is the
-# ordering, which is a property of the built activate script rather than of the
-# step; it says so where it sits.
+# proves what it does with them. Two checks cannot work that way: the ordering,
+# which is a property of the built activate script rather than of the step, and
+# the font outcome, which needs a whole activation. Both say so where they sit,
+# and the second one is the only place in this suite that activates anything -
+# read the comment above it before touching it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -39,7 +45,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 7
+dotfiles_test_expect 9
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -82,10 +88,15 @@ test_brewfile_is_written_inside_the_home_directory() {
   assert_eq "$target" "$BREWFILE_TARGET" \
     "the Brewfile is not a managed file at $BREWFILE_TARGET"
 
-  # Not one of the paths `brew bundle --global` reads. --global is also the
-  # mode in which $HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP turns on an unprompted
-  # cleanup, so a Brewfile sitting on that search path could be turned into an
-  # uninstaller by a command run for some entirely unrelated reason.
+  # Not one of the paths `brew bundle --global` reads, so this generated list
+  # is what Homebrew acts on when this step passes --file and at no other time.
+  # A Brewfile sitting on that search path would also be picked up by a
+  # `brew bundle` the user ran for an unrelated reason, a `cleanup` among them.
+  #
+  # This is not what keeps a cleanup from running - the environment variables
+  # that turn one on are not gated on --global, and the step unsets them
+  # itself. test_the_homebrew_step_neutralizes_the_cleanup_variables is the
+  # check that covers that.
   global_paths=".config/homebrew/Brewfile .homebrew/Brewfile .Brewfile"
   for candidate in $global_paths; do
     [ "$BREWFILE_TARGET" != "$candidate" ] \
@@ -129,13 +140,13 @@ test_brewfile_lists_exactly_the_declared_formulae_and_casks() {
 # The home directory is a temp root carrying a real copy of the generated
 # Brewfile, because the step refuses to run without one.
 #
-# Takes the HOMEBREW_NO_AUTO_UPDATE to hand the step, or nothing at all to hand
-# it an environment where the variable is absent. Which of the two a caller
-# picks decides what the recording can prove: handing in a value can only show
-# whether the step cleared it, and only an absent variable can show whether the
-# step set one of its own.
+# Takes any number of NAME=VALUE pairs to export into the step's environment,
+# and hands the step nothing else. What a caller passes decides what the
+# recording can prove, and the two directions are not interchangeable: handing
+# a variable in can only show whether the step cleared it, and leaving it out
+# is the only way to see the step setting one of its own.
 dotfiles_run_brew_step() {
-  local no_auto_update=${1-} root generation script status=0
+  local root generation script status=0
   generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
   script=$(dotfiles_brew_bundle_script "$generation") \
@@ -155,27 +166,22 @@ dotfiles_run_brew_step() {
 # removes anything: the point is to see what the step asks Homebrew to do.
 printf 'argv: %s\n' "$*"
 printf 'HOMEBREW_NO_AUTO_UPDATE: %s\n' "${HOMEBREW_NO_AUTO_UPDATE-<unset>}"
+printf 'HOMEBREW_BUNDLE_INSTALL_CLEANUP: %s\n' "${HOMEBREW_BUNDLE_INSTALL_CLEANUP-<unset>}"
+printf 'HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP: %s\n' "${HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP-<unset>}"
 STANDIN
   chmod +x "$root/prefix/bin/brew"
 
   # env -i, so the recording reflects what the step sets rather than what the
   # shell running the suite happened to export. PATH is deliberately useless:
   # Home Manager's activation replaces PATH before running this, and the step
-  # has to find Homebrew without it.
-  if [ "$#" -eq 0 ]; then
-    env -i \
-      HOME="$root/home" \
-      PATH=/usr/bin:/bin \
-      HOMEBREW_PREFIX="$root/prefix" \
-      "$script" 2>&1 || status=$?
-  else
-    env -i \
-      HOME="$root/home" \
-      PATH=/usr/bin:/bin \
-      HOMEBREW_PREFIX="$root/prefix" \
-      HOMEBREW_NO_AUTO_UPDATE="$no_auto_update" \
-      "$script" 2>&1 || status=$?
-  fi
+  # has to find Homebrew without it. The caller's pairs go last, so a test can
+  # hand the step whatever environment it needs to be tested against.
+  env -i \
+    HOME="$root/home" \
+    PATH=/usr/bin:/bin \
+    HOMEBREW_PREFIX="$root/prefix" \
+    "$@" \
+    "$script" 2>&1 || status=$?
 
   [ "$status" = 0 ] || fail "the Homebrew step failed against a stand-in brew (exit $status)"
 }
@@ -246,13 +252,62 @@ test_the_homebrew_step_does_not_touch_auto_update() {
 
   # And starting from a value the caller exported is the only way to catch the
   # step clearing it, which is what this configuration used to do.
-  recording=$(dotfiles_run_brew_step 1) \
+  recording=$(dotfiles_run_brew_step HOMEBREW_NO_AUTO_UPDATE=1) \
     || fail "could not run the Homebrew step against a stand-in brew"
 
   assert_contains "$recording" "HOMEBREW_NO_AUTO_UPDATE: 1" \
     "the Homebrew step cleared HOMEBREW_NO_AUTO_UPDATE instead of leaving the user's value alone"
 
   pass "homebrew: the step neither sets nor clears HOMEBREW_NO_AUTO_UPDATE"
+}
+
+test_the_homebrew_step_neutralizes_the_cleanup_variables() {
+  local recording
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "Homebrew cleanup variable check (nix not found)"
+    return 0
+  fi
+
+  # The one check standing between this repository and the disaster it exists
+  # to prevent. `brew bundle install` takes its `--cleanup` and
+  # `--force-cleanup` switches from the environment as well as from argv, and
+  # with either set it uninstalls every formula and cask not in the Brewfile -
+  # an employer's security agent among them. Both variables are plausible on a
+  # real machine: a shell profile, ~/.zshrc.local, or a managed configuration
+  # profile can export them without the user thinking about this repo at all.
+  #
+  # Two things make this worth a check of its own rather than a line in the
+  # banned-word loop above. The loop reads argv, and argv is exactly where this
+  # does not appear - which is why it passed while the behaviour was reachable.
+  # And Homebrew's help text says these are enabled "if $VAR is set and
+  # --global is passed", which is not what its parser does: the --global half
+  # is documentation, and the variable is honoured on its own.
+  #
+  # So the step is handed both, set to the value that turns them on, and the
+  # stand-in has to report both absent.
+  recording=$(dotfiles_run_brew_step \
+    HOMEBREW_BUNDLE_INSTALL_CLEANUP=1 \
+    HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP=1) \
+    || fail "could not run the Homebrew step against a stand-in brew"
+
+  assert_contains "$recording" "HOMEBREW_BUNDLE_INSTALL_CLEANUP: <unset>" \
+    "HOMEBREW_BUNDLE_INSTALL_CLEANUP reached Homebrew, so a rebuild would uninstall everything not in the Brewfile"
+  assert_contains "$recording" "HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP: <unset>" \
+    "HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP reached Homebrew, so a rebuild would uninstall everything not in the Brewfile"
+
+  # Setting them to "0" must not be mistaken for a fix if anyone ever tries it:
+  # Homebrew asks whether the value is present, not whether it is true.
+  recording=$(dotfiles_run_brew_step \
+    HOMEBREW_BUNDLE_INSTALL_CLEANUP=0 \
+    HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP=0) \
+    || fail "could not run the Homebrew step against a stand-in brew"
+
+  assert_contains "$recording" "HOMEBREW_BUNDLE_INSTALL_CLEANUP: <unset>" \
+    "HOMEBREW_BUNDLE_INSTALL_CLEANUP reached Homebrew as \"0\", which Homebrew reads as set"
+  assert_contains "$recording" "HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP: <unset>" \
+    "HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP reached Homebrew as \"0\", which Homebrew reads as set"
+
+  pass "homebrew: the step unsets both Homebrew cleanup variables, whatever the environment exports"
 }
 
 # --- the step runs after the Brewfile has been written -------------------------
@@ -323,7 +378,140 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
   [ "$bundle" -gt "$onchange" ] \
     || fail "the Homebrew step runs before onFilesChange, so a failure strands the font rsync behind a marker that is already in place"
 
-  pass "homebrew: the step activates last, after the Brewfile, the Nix packages and the on-change hooks"
+  pass "homebrew: the step activates after the Brewfile, the Nix packages and the on-change hooks"
+}
+
+# --- a failing Homebrew step leaves nothing permanently broken -----------------
+#
+# The check above pins the ORDER. This one pins the OUTCOME the order exists to
+# protect, by actually activating a configuration and looking at the result.
+#
+# THIS IS THE ONE PLACE IN THIS SUITE THAT ACTIVATES ANYTHING. AGENTS.md says
+# never to activate while testing, and that rule still holds everywhere else -
+# `home-manager switch`, ./rebuild.sh and ./bootstrap.sh rewrite a real home
+# directory and no test may run them. This is a deliberate, guarded exception,
+# and what makes it safe is that it does not activate THIS configuration: it
+# builds a variant whose homeDirectory is a temp directory, so every absolute
+# path baked into the activate script - the font target, the LaunchAgents
+# directory, the profile manifest - points into that temp tree instead of a
+# real home. dotfiles_activate_variant refuses to run anything until it has
+# confirmed that, by searching the built script for the real home directory and
+# finding none. Do not copy this pattern without that guard.
+#
+# What is being guarded, and it is not hypothetical: the font rsync in
+# onFilesChange is the only thing that installs nerd-fonts.hack, and it is
+# guarded by a marker file that linkGeneration has already written into the
+# home directory. Order the Homebrew step before onFilesChange and a Mac
+# without Homebrew aborts activation in between, under `set -eu`, with the
+# marker in place and the font never copied. Every later rebuild then compares
+# the marker against the store, concludes nothing changed, and skips the rsync
+# again. The font never lands and never self-heals; the terminal renders tofu
+# and no amount of rebuilding repairs it.
+#
+# Verified in both directions before this was committed: with the
+# "onFilesChange" edge present the font is there at the end, and with that edge
+# removed from home.nix the same two runs leave no HomeManager font directory
+# at all while the marker sits in place.
+
+# Build the configuration with homeDirectory pointed at $1, and print the store
+# path of the resulting generation. Fails, without having run anything, if the
+# built script still refers to the real home directory.
+dotfiles_activate_variant() {
+  local home=$1 repo=$2 built configured
+  mkdir -p "$repo"
+
+  # Tracked files only, so the variant is the committed configuration and not
+  # whatever else is lying around the working tree.
+  (cd "$ROOT" && git ls-files -z | xargs -0 tar -cf -) | (cd "$repo" && tar -xf -) \
+    || fail "could not copy the repository into the test root"
+
+  # The repo's own definition of how that line is read and rewritten, rather
+  # than a sed of this test's own devising - if it ever stops working, that is
+  # something the suite should notice here too.
+  /bin/bash -c ". \"\$1/lib/flake-settings.sh\"; flake_settings_set_home_directory \"\$2/flake.nix\" \"\$3\"" \
+    _ "$ROOT" "$repo" "$home" \
+    || fail "could not point the variant configuration at the test home"
+
+  configured=$(/bin/bash -c ". \"\$1/lib/flake-settings.sh\"; flake_settings_home_directory \"\$2/flake.nix\"" \
+    _ "$ROOT" "$repo") \
+    || fail "could not read back the variant's homeDirectory"
+
+  # The guard. This repository's whole premise is that it cannot damage a
+  # machine it does not administer, and a test that activates a configuration
+  # is the one place a bug in the test could break that premise. Both of these
+  # must hold before anything runs.
+  [ "$configured" = "$home" ] \
+    || fail "the variant configuration manages $configured, not the test home $home"
+  [ "$configured" != "$HOME" ] \
+    || fail "the variant configuration manages the real home directory - refusing to activate"
+
+  built=$(nix build --no-link --print-out-paths "$repo#packages.$SYSTEM.default" 2>/dev/null) \
+    || fail "could not build the variant configuration"
+
+  # Belt and braces, and the assertion that actually makes this safe: every
+  # absolute path in the activate script is derived from homeDirectory, so if
+  # the real home appears anywhere in it, something was not redirected.
+  ! grep -q -F "$HOME" "$built/activate" \
+    || fail "the variant's activate script still refers to $HOME - refusing to activate"
+
+  printf '%s\n' "$built"
+}
+
+# Run a built variant's activate script against a stub `brew` that exits $2.
+# Prints nothing; returns the activation's own exit status.
+dotfiles_run_activation() {
+  local built=$1 home=$2 prefix=$3 brew_exit=$4 nixbin status=0
+  nixbin=$(dirname "$(command -v nix)")
+
+  mkdir -p "$prefix/bin"
+  printf '#!/bin/sh\nexit %s\n' "$brew_exit" >"$prefix/bin/brew"
+  chmod +x "$prefix/bin/brew"
+
+  # env -i for the same reason the stand-in runs use it. USER is needed because
+  # the activate script reads it; nix has to be on PATH because installPackages
+  # shells out to it, and with HOME inside the temp tree the profile it writes
+  # lands there too rather than in the real user's.
+  env -i \
+    HOME="$home" \
+    USER="$(id -un)" \
+    PATH="/usr/bin:/bin:$nixbin" \
+    HOMEBREW_PREFIX="$prefix" \
+    "$built/activate" >"$home/../activation.log" 2>&1 || status=$?
+
+  return "$status"
+}
+
+test_a_failed_homebrew_step_still_leaves_the_font_installed() {
+  local root home built status=0
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "font outcome check (nix not found)"
+    return 0
+  fi
+
+  root=$(dotfiles_test_tmproot dotfiles-fontoutcome)
+  home="$root/home"
+  mkdir -p "$home"
+
+  built=$(dotfiles_activate_variant "$home" "$root/repo") \
+    || fail "could not build a variant configuration to activate"
+
+  # A Mac with no usable Homebrew: the step finds the stub, the stub fails, and
+  # activation stops there.
+  dotfiles_run_activation "$built" "$home" "$root/prefix" 1 || status=$?
+  [ "$status" != 0 ] \
+    || fail "the activation succeeded even though the Homebrew step failed"
+
+  # The user installs Homebrew and rebuilds. This must repair the machine.
+  dotfiles_run_activation "$built" "$home" "$root/prefix" 0 \
+    || fail "the activation failed with a working Homebrew"
+
+  # The outcome, not the order: the font files are on disk.
+  [ -d "$home/Library/Fonts/HomeManager" ] \
+    || fail "no font was installed after a failed Homebrew step and a successful rebuild - the rsync was stranded behind its marker"
+  [ -n "$(find "$home/Library/Fonts/HomeManager" -type f -print -quit)" ] \
+    || fail "the font directory was created but is empty after a failed Homebrew step and a successful rebuild"
+
+  pass "homebrew: a failed Homebrew step does not strand the font install"
 }
 
 # --- a Mac without Homebrew is told so ----------------------------------------
@@ -418,7 +606,9 @@ test_brewfile_is_written_inside_the_home_directory
 test_brewfile_lists_exactly_the_declared_formulae_and_casks
 test_the_homebrew_step_installs_and_cannot_remove
 test_the_homebrew_step_does_not_touch_auto_update
+test_the_homebrew_step_neutralizes_the_cleanup_variables
 test_the_homebrew_step_runs_after_the_brewfile_is_written
+test_a_failed_homebrew_step_still_leaves_the_font_installed
 test_a_missing_homebrew_fails_with_an_explanation
 test_no_tool_is_installed_by_both_nix_and_homebrew
 

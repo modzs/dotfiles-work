@@ -43,12 +43,16 @@ What follows from it, and still holds without exception - this repo must never:
 The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
 the evaluated configuration, if a managed file targets a path outside `$HOME`, if
-any tracked script gains a privilege escalation, if any script this repo runs so
-much as mentions Homebrew, or if the built artifact embeds a Homebrew path other
-than the two an existing `brew` lives at. `tests/homebrew.test.sh` runs the
-Homebrew step against a recording stand-in for `brew` and fails if it passes
-anything that could uninstall, if a missing Homebrew produces a raw error rather
-than an explanation, or if a tool ends up installed by both Nix and Homebrew.
+any tracked script gains a privilege escalation, if any script this repo runs
+invokes `brew` or carries a Homebrew installer URL in its text, or if the built
+artifact embeds a Homebrew path other than the two an existing `brew` lives at.
+Both that check and the privilege one tokenize rather than grep, so *explaining*
+Homebrew or `sudo` in a comment is fine and several of these scripts do;
+invoking one is what fails. `tests/homebrew.test.sh` runs the Homebrew step
+against a recording stand-in for `brew` and fails if it passes anything that
+could uninstall or upgrade, if it lets either Homebrew cleanup variable through
+from the environment, if a missing Homebrew produces a raw error rather than an
+explanation, or if a tool ends up installed by both Nix and Homebrew.
 Read both files before changing the structure of the configuration; they explain
 what each check asserts and why a grep would not do.
 
@@ -87,6 +91,15 @@ documents that seam.
   `nix build .#default` and `nix eval` are safe; `home-manager switch`,
   `./rebuild.sh` and `./bootstrap.sh` rewrite a real home directory. Building an
   activation package is not activating it.
+  There is exactly one sanctioned exception, and it is not a licence to add
+  more: `tests/homebrew.test.sh` activates a *variant* configuration whose
+  `homeDirectory` is a temp directory, because the outcome it pins - that a
+  failed Homebrew step does not permanently strand the font install - cannot be
+  observed any other way. Every absolute path in an activate script derives
+  from `homeDirectory`, so redirecting it redirects all of them, and the helper
+  refuses to run anything until it has searched the built script for the real
+  home directory and found none. Any future exception needs that same guard and
+  the same reason.
 - Run the suite with `./tests/run.sh` (`--strict` in CI, where a skipped check is
   a failure). It works from any directory, and there is a test count behind that
   claim: every test file declares `dotfiles_test_expect <n>`, and `test_summary`

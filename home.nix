@@ -27,11 +27,16 @@ let
   # Where the generated Brewfile lands, relative to the home directory.
   #
   # Deliberately not ~/.config/homebrew/Brewfile, which is one of the paths
-  # `brew bundle --global` reads: `--global` is also the mode in which
-  # $HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP turns on an unprompted cleanup, and
-  # a cleanup driven by this file would uninstall everything the user installed
-  # by hand. Keeping the file off the global search path means no Homebrew
-  # command can be pointed at it by accident.
+  # `brew bundle --global` reads. A file sitting there is one any `brew bundle`
+  # command run for an unrelated reason would pick up, including a `brew bundle
+  # cleanup` the user meant to point at a Brewfile of their own; keeping it off
+  # that search path means this generated list is used when this step passes
+  # `--file` and at no other time.
+  #
+  # This is worth having on its own merits, and it is not a safety mechanism.
+  # It does not stop an environment-driven cleanup: those variables are not
+  # gated on `--global`, and the step neutralizes them itself right before it
+  # runs Homebrew. See the comment there.
   brewfileTarget = ".config/dotfiles/Brewfile";
 
   brewfile = ''
@@ -128,7 +133,8 @@ let
     # `--cleanup`, no `--force-cleanup`, no `--zap` and no `--global`: on this
     # machine Homebrew is the user's own general-purpose package manager, and a
     # declarative cleanup would uninstall everything they installed for reasons
-    # this repository knows nothing about.
+    # this repository knows nothing about. Passing no such flag is necessary
+    # but not sufficient - see the two variables unset below.
     #
     # --no-upgrade is nix-darwin's `homebrew.onActivation.upgrade = false`,
     # which is the default the personal configuration this mirrors leaves in
@@ -147,6 +153,31 @@ let
     # never clears one the user exported, and clearing it here would silently
     # reverse a deliberate choice - a slow or proxied network is exactly why
     # someone sets it.
+    #
+    # The two below are a different question, and the only two variables this
+    # step touches. Passing no cleanup flag is not enough to keep a cleanup
+    # from running, because `brew bundle install` accepts both of these from
+    # the environment and they turn on exactly the mass uninstall this
+    # repository exists to prevent - every formula and cask not in the
+    # Brewfile, an employer's security agent included. Three things about them
+    # are worth knowing before touching this:
+    #
+    #   - they are NOT gated on `--global`, whatever Homebrew's own help text
+    #     suggests. In cli/parser.rb the second element of a switch's `env:`
+    #     pair is used only to build that sentence; the switch is then set from
+    #     the environment unconditionally.
+    #   - HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP reaches the cleanup without
+    #     needing `--force` at all. Dropping `--force` from the line below
+    #     would therefore not fix this, so nobody should try.
+    #   - unsetting is the only neutralization that works. The parser asks
+    #     whether the value is *present*, not whether it is true, so "0" turns
+    #     the switch on just as "1" does - the same trap as
+    #     HOMEBREW_NO_AUTO_UPDATE above, for the same reason.
+    #
+    # Unlike auto-update, these are not a preference of the user's that this
+    # step is second-guessing: their only effect here is to make the step do
+    # the one thing this repository forbids.
+    unset HOMEBREW_BUNDLE_INSTALL_CLEANUP HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP
 
     exec "$brew" bundle install --file "$brewfile" --no-upgrade --force
   '';
@@ -207,7 +238,14 @@ in
   #
   # `brew bundle install` runs on every switch, so editing the lists above and
   # running ./rebuild.sh is all there is to it - the same loop as home.packages.
-  # It is the last thing activation does, and every edge below is load bearing.
+  # It runs after everything that writes the home directory, which is what the
+  # edges below buy. It is not literally last - `setupLaunchAgents` follows it,
+  # and under `set -eu` a Homebrew failure skips that step. Nothing is stranded
+  # by that: this configuration declares no launchd agents, and the step
+  # reconciles the new generation against the old one every time rather than
+  # behind a marker, so a skipped run self-heals on the next successful switch.
+  # That is exactly the property the three edges below exist to give the steps
+  # that do not have it.
   # `writeBoundary` is only a barrier - it writes nothing - so an entry naming
   # it alone is free to be ordered before `linkGeneration`, and `linkGeneration`
   # is the step that puts the Brewfile this script reads into the home
