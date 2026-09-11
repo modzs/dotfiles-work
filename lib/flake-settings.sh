@@ -93,18 +93,64 @@ flake_settings_config_name() {
 # whatever delimiter it chose out of it. awk takes the value through -v, where
 # it is data and never pattern.
 
+# Print the path that actually holds $1's bytes, following a symlink chain to
+# its end. flake.nix is a file a user may well have symlinked into place, and a
+# rewrite has to land on the file rather than replace the link with a regular
+# one. There is no `readlink -f` to lean on: macOS ships BSD readlink, so the
+# chain is walked by hand, with a bound so a loop of links stops rather than
+# spins.
+flake_settings_resolve() {
+  local path=$1 target hops=0
+  while [ -L "$path" ]; do
+    hops=$((hops + 1))
+    if [ "$hops" -gt 32 ]; then
+      echo "ERROR: too many levels of symbolic links at $1." >&2
+      return 1
+    fi
+    target=$(readlink "$path") || return 1
+    case $target in
+      /*) path=$target ;;
+      *) path=$(dirname "$path")/$target ;;
+    esac
+  done
+  printf '%s\n' "$path"
+}
+
 # Replace the value on the single `<key> = ...;` line in $1. $2 is the key, $3
 # is the already-formatted Nix expression to put there (a quoted string, or
 # `null`). Fails without touching the file if that line is not there exactly
 # once.
+#
+# The commit at the end is a rename, not a copy over the original. `cat "$tmp"
+# >"$file"` truncates the target and only then starts writing, so an
+# interruption anywhere in that window leaves an empty or half-written
+# flake.nix - and this is the file bootstrap personalises, so it is the one a
+# first-time user is least able to reconstruct. A rename is atomic: the path
+# holds either the old file or the new one, never a partial.
+#
+# A plain `mv` is not enough on its own, because it would regress the two
+# properties the copy had for free, so both are restored explicitly:
+#
+#   - the temp file is created beside the target and given the target's mode,
+#     because mktemp makes it 0600 and a rename keeps the source's permissions;
+#   - the rename lands on the *resolved* path, so a symlinked flake.nix is
+#     written through rather than replaced by a regular file.
+#
+# Beside the target rather than in TMPDIR for a third reason: rename is only
+# atomic within one filesystem, and TMPDIR need not be on the target's.
 flake_settings_write() {
-  local file=$1 key=$2 literal=$3 count tmp
+  local file=$1 key=$2 literal=$3 count real dir mode tmp
   count=$(grep -cE "^[[:space:]]*$key = [^;]*;" "$file" || true)
   if [ "$count" != 1 ]; then
     echo "ERROR: expected exactly one '$key = ...;' line in $file, found $count." >&2
     return 1
   fi
-  tmp=$(mktemp "${TMPDIR:-/tmp}/flake-settings.XXXXXX") || return 1
+  real=$(flake_settings_resolve "$file") || return 1
+  mode=$(stat -f '%Lp' "$real") || return 1
+  dir=$(dirname "$real")
+  # Beside the target on purpose, never in TMPDIR: rename is only atomic within
+  # one filesystem. See the note above this function before moving it.
+  tmp=$(mktemp "$dir/.flake-settings.XXXXXX") || return 1
   awk -v key="$key" -v literal="$literal" '
     !written && $0 ~ "^[[:space:]]*" key " = [^;]*;" {
       match($0, /^[[:space:]]*/)
@@ -114,8 +160,8 @@ flake_settings_write() {
     }
     { print }
   ' "$file" >"$tmp" || { rm -f "$tmp"; return 1; }
-  cat "$tmp" >"$file" || { rm -f "$tmp"; return 1; }
-  rm -f "$tmp"
+  chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$real" || { rm -f "$tmp"; return 1; }
 }
 
 # A value that has to survive a round trip through a Nix string literal and a

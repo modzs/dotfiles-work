@@ -4,7 +4,7 @@
 # Homebrew's half is tests/homebrew.test.sh; nothing appears in both, and that
 # is itself asserted there.
 #
-# Two properties, both of which have already been wrong once:
+# Three properties, two of which have already been wrong once:
 #
 # - every package must exist for BOTH Darwin architectures. `ghostty` in
 #   nixpkgs is a Linux-only package; on macOS the working attribute is
@@ -12,7 +12,11 @@
 #   caught here rather than on the machine that cannot be repaired;
 # - a GUI app from nixpkgs must be symlinked rather than copied, because
 #   copying needs a macOS permission that a managed Mac may refuse and whose
-#   refusal aborts the whole activation.
+#   refusal aborts the whole activation;
+# - the font wezterm.lua names by hand is really installed, where macOS looks
+#   for it. That one is a link between two files that do not reference each
+#   other, and breaking it fails silently: the terminal just renders in some
+#   other font.
 #
 # A third check used to live here: that macOS could resolve an executable
 # inside every installed .app bundle. It was written for WezTerm's old-style
@@ -31,7 +35,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 2
+dotfiles_test_expect 3
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -104,7 +108,64 @@ test_gui_apps_are_linked_rather_than_copied() {
   pass "packages: GUI apps are symlinked into ~/Applications, needing no macOS permission"
 }
 
+# --- the font wezterm names actually lands ------------------------------------
+
+test_the_configured_font_is_installed_where_wezterm_looks() {
+  local generation fonts line destination family file nerdfonts candidate found
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "the configured font (nix not found)"
+    return 0
+  fi
+
+  # home.nix calls nerd-fonts.hack "the font everything renders in" and
+  # wezterm.lua hard-codes the family by name. Nothing connected the two: a
+  # rename on either side would leave wezterm asking for a font that is not
+  # there, and the only symptom is a terminal quietly falling back to another
+  # one. Asked of the built artifact rather than of a real activation, because
+  # nothing in this suite may activate - see tests/homebrew.test.sh.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package for $SYSTEM"
+
+  fonts=$(grep -o '/nix/store/[a-z0-9]*-home-manager-fonts/share/fonts/' \
+    "$generation/activate" | head -n1)
+  [ -n "$fonts" ] || fail "the activation script installs no fonts at all"
+
+  # The rsync destination is the tail of the same line, and it is what
+  # wezterm's font lookup will search.
+  line=$(grep -m1 -F "$fonts" "$generation/activate")
+  destination=${line##* }
+  case $destination in
+    */Library/Fonts/HomeManager) : ;;
+    *) fail "the font is installed to $destination, which macOS does not search for fonts" ;;
+  esac
+
+  family=$(sed -nE 's/^config\.font = wezterm\.font\("([^"]*)"\).*/\1/p' \
+    "$ROOT/home/.config/wezterm/wezterm.lua")
+  [ -n "$family" ] || fail "could not read the font family out of wezterm.lua"
+
+  # Nerd Fonts name their files after the family with the spaces removed. Which
+  # subdirectory the family lands in is Home Manager's layout, not a promise of
+  # this repository's, so it is searched rather than named: naming it would make
+  # a font changed correctly on both sides fail as though the link were broken.
+  file=$(printf '%s\n' "$family" | tr -d ' ')
+  nerdfonts="$fonts/truetype/NerdFonts"
+  [ -d "$nerdfonts" ] \
+    || fail "no $nerdfonts directory: the font layout moved, so this check no longer knows where to look"
+
+  found=''
+  for candidate in "$nerdfonts"/*/"$file-Regular.ttf"; do
+    [ -f "$candidate" ] || continue
+    found=$candidate
+    break
+  done
+  [ -n "$found" ] \
+    || fail "wezterm.lua asks for \"$family\", but no $file-Regular.ttf is installed under $nerdfonts"
+
+  pass "packages: the font wezterm.lua names is installed into $destination"
+}
+
 test_every_package_supports_both_architectures
 test_gui_apps_are_linked_rather_than_copied
+test_the_configured_font_is_installed_where_wezterm_looks
 
 test_summary

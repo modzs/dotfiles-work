@@ -18,7 +18,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 11
+dotfiles_test_expect 13
 
 # A minimal file with the same two lines flake.nix carries. Using a fixture
 # rather than a copy of flake.nix keeps a failure here pointing at the parser
@@ -141,6 +141,62 @@ test_the_real_flake_takes_a_write() {
   pass "settings: the repository's real flake.nix takes both rewrites"
 }
 
+test_the_commit_is_an_atomic_replace() {
+  local tmp file before_inode after_inode entry leftovers
+  tmp=$(dotfiles_test_tmproot dotfiles-settings)
+  file="$tmp/flake.nix"
+  write_fixture "$file" someone null
+  chmod 640 "$file"
+  before_inode=$(stat -f '%i' "$file")
+
+  flake_settings_set_user "$file" other || fail "could not write the user"
+
+  # The interruption case, made deterministic. `cat "$tmp" >"$file"` truncates
+  # the target and only then copies into it, so a run killed in that window
+  # leaves an empty flake.nix behind; a rename cannot, because the path holds
+  # the old file until the instant it holds the whole new one. The observable
+  # difference between the two is the inode: an in-place rewrite keeps it, a
+  # rename swaps a different one into place.
+  after_inode=$(stat -f '%i' "$file")
+  [ "$after_inode" != "$before_inode" ] \
+    || fail "the write rewrote the file in place; an interruption would empty it"
+
+  assert_eq "$(flake_settings_user "$file")" other "the written user did not read back"
+  # A rename keeps the source's permissions, so the mode has to be carried over
+  # deliberately. mktemp makes its file 0600; 0640 surviving proves it was.
+  assert_eq "$(stat -f '%Lp' "$file")" 640 "the write did not preserve the file's mode"
+
+  leftovers=
+  for entry in "$tmp"/* "$tmp"/.*; do
+    [ -e "$entry" ] || continue
+    case ${entry##*/} in flake.nix | . | ..) continue ;; esac
+    leftovers="$leftovers ${entry##*/}"
+  done
+  assert_eq "$leftovers" "" "the write left a temporary file behind"
+
+  pass "settings: a write replaces the file atomically, keeping its mode"
+}
+
+test_a_write_follows_a_symlink() {
+  local tmp file
+  tmp=$(dotfiles_test_tmproot dotfiles-settings)
+  file="$tmp/flake.nix"
+  # flake.nix is a file a user may well have symlinked into place. A rename
+  # onto the link path would replace the link with a regular file and leave the
+  # real one untouched, so the write has to resolve the link first.
+  write_fixture "$tmp/real.nix" someone null
+  ln -s real.nix "$file"
+
+  flake_settings_set_user "$file" other \
+    || fail "could not write the user through a symlinked flake.nix"
+
+  [ -L "$file" ] || fail "the write replaced the symlink with a regular file"
+  assert_eq "$(flake_settings_user "$tmp/real.nix")" other \
+    "the write did not reach the file the symlink points at"
+
+  pass "settings: a write goes through a symlinked flake.nix, not over it"
+}
+
 test_a_value_that_cannot_be_written_is_refused() {
   local tmp file before
   tmp=$(dotfiles_test_tmproot dotfiles-settings)
@@ -238,6 +294,8 @@ test_explicit_home_directory_is_used_verbatim
 test_writing_settings_round_trips
 test_writing_preserves_the_rest_of_the_file
 test_the_real_flake_takes_a_write
+test_the_commit_is_an_atomic_replace
+test_a_write_follows_a_symlink
 test_a_value_that_cannot_be_written_is_refused
 test_a_missing_line_is_reported_not_guessed
 test_the_architecture_is_read_off_the_machine

@@ -149,6 +149,22 @@ finds them. Use it for GUI applications, and for anything not in nixpkgs.
 Never put the same tool in both. Two copies on your `PATH` are resolved by an
 ordering you did not choose, and `tests/homebrew.test.sh` fails if it happens.
 
+**If a change involves a new file in this repository, `git add` it first.** Nix
+builds a flake from what git tracks, so an edit to a file that is already
+tracked is picked up whether or not you have committed it - but a file you have
+just created is invisible to the build. Split the lists into a second `.nix`
+file and import it, and the build stops with `error: Path 'lists.nix' in the
+repository "/Users/you/.dotfiles" is not tracked by Git.`, then hands you the
+command: `To make it visible to Nix, run: git -C "/Users/you/.dotfiles" add
+"lists.nix"`. That is the whole fix, and no commit is needed to try it.
+(Neovim's and wezterm's configs are the exception, and for a reason worth
+knowing: they are symlinked to this working tree rather than built into the
+store - see "Edit the neovim or wezterm configuration" below - so a new file
+there works untracked. Git will still lose it the day you move machines. This
+is also nothing to do with the untracked `~/.gitconfig.local` and
+`~/.zshrc.local` files below, which live in your home directory and are
+deliberately outside this repository.)
+
 ### From Nix
 
 ```nix
@@ -383,10 +399,14 @@ store copy would be read-only.
 different home directory than the one you are in. Fix the `homeDirectory` line in
 `flake.nix`, or run `./bootstrap.sh`.
 
-**`Existing file '/Users/you/.zshrc' is in the way`** - the first switch found a
-file it wants to own. `bootstrap.sh` passes `-b backup`, which renames it to
-`.zshrc.backup` instead of failing. If you hit this from `rebuild.sh`, move the
-file aside yourself and run it again.
+**`Existing file '/Users/you/.zshrc' would be clobbered`** - the switch found a
+file it wants to own and was given no way to get it out of the way.
+`bootstrap.sh` passes `-b backup`, which renames it to `.zshrc.backup` and
+carries on; `rebuild.sh` does not, so move the file aside yourself and run it
+again. A near-identical line naming a `.backup` file - `Existing file
+'/Users/you/.zshrc.backup' would be clobbered by backing up
+'/Users/you/.zshrc'` - is the same problem one step along: a backup from an
+earlier run is already there, and the fix is to move or delete that one.
 
 **`nix: command not found` right after bootstrapping** - open a new terminal.
 If a new terminal still cannot find it, the Nix block is missing from

@@ -376,6 +376,10 @@ documents that seam.
   read and rewritten; both scripts and the tests go through it. The architecture
   is deliberately **not** adjustable - both Darwin systems are built from the
   same source and the scripts detect which one they are on.
+  Its write commits by **renaming a temp file created beside the target**, never
+  by copying over the original, and the temp must never move to `TMPDIR` -
+  `lib/flake-settings.sh` carries the reasoning and
+  `tests/flake-settings.test.sh` holds it.
 - Wherever a script offers a default, the default must be the **machine's current
   reality**, never the value already in the config. The repo this one replaces
   offered its configured machine name as the default, so pressing Enter silently
