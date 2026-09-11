@@ -77,10 +77,14 @@ echo "==> Preflight: Homebrew's prefix"
 dotfiles_homebrew_preflight "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
 
 echo "==> Step 1: Determinate Nix"
-echo "    This asks for your password. Step 5 asks once more, and that is all."
 if command -v nix >/dev/null 2>&1; then
   echo "    nix already installed, skipping"
 else
+  # Announced inside the branch that actually asks. Said before the check, a
+  # re-run on a bootstrapped Mac promised two password prompts and then asked
+  # for none - step 5 skips itself the same way - and a script that overstates
+  # what it is about to do is one a user stops believing about the rest.
+  echo "    This asks for your password. Step 5 asks once more, and that is all."
   curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix \
     | sh -s -- install --no-confirm
   # shellcheck disable=SC1091
@@ -132,6 +136,15 @@ case "$(dotfiles_homebrew_prefix_state "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRAR
     # this is the line immediately before the one that would write.
     echo "ERROR: refusing to set up $HOMEBREW_PREFIX_PATH." >&2
     dotfiles_homebrew_report_occupied "       " \
+      "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
+    exit 1
+    ;;
+  unusable)
+    # The other refusal, and it stops the run here rather than spending a
+    # password on a prefix that cannot be given to this account. The preflight
+    # said this too; this is the line immediately before the one that would ask.
+    echo "ERROR: refusing to set up $HOMEBREW_PREFIX_PATH." >&2
+    dotfiles_homebrew_report_unusable "       " \
       "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
     exit 1
     ;;
@@ -230,7 +243,7 @@ fi
   switch -b backup --flake "$HOME/.dotfiles#$CONFIG_NAME"
 
 # Only now is this worth asking: the switch is what installs the git includes,
-# so before it git could not have read the file step 5 just seeded. It stays
+# so before it git could not have read the file step 6 just seeded. It stays
 # silent unless git would have to invent an identity.
 git_identity_report "    "
 

@@ -405,10 +405,24 @@ create one; creating it needs a password and belongs to `./bootstrap.sh`. Run
 `./bootstrap.sh` on this Mac. Everything Nix installs is already in place by
 then; only the formulae and casks are missing.
 
-**`dotfiles-work: <library> is not writable by <you>`** - the prefix exists and
-carries this repo's marker, but not for your account. That happens when it was
-set up for a different user. Re-run `./bootstrap.sh`, which will say what it
-finds.
+**`<prefix> already holds directories that do not belong to your account`** -
+the prefix contains directories something else created, and this repo will not
+take them over. You will see this from `./bootstrap.sh` before anything is
+installed, or from a rebuild if the prefix stopped being yours after it was set
+up - a prefix set up for a different user reads the same way. The message lists
+the exact paths. Nothing has been changed either way.
+
+To continue, give those paths to your own account and run `./bootstrap.sh`
+again - for each path the message named:
+
+```sh
+sudo chown -R "$(whoami)" <path>
+```
+
+That is your decision to make and not this repo's, which is why it asks rather
+than doing it: on a Mac you share with software you did not install, a directory
+in `/usr/local` may belong to that software for a reason. If you would rather
+not, do not use this repo on this Mac.
 
 **`dotfiles-work: no Homebrew at ...`** - a rebuild got to the Brewfile step and
 found no `brew` to hand it to, which normally means the step before it did not

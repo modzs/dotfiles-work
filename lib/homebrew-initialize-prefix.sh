@@ -70,11 +70,22 @@ fi
 # but a preflight runs minutes and several steps earlier, and this is the one
 # process on the machine running with enough privilege to do real damage if the
 # answer changed in between.
-STATE=$(dotfiles_homebrew_prefix_state "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY")
+#
+# Judged for the owner's account and not for root's, which is the whole reason
+# the state machine takes a uid. Asked as root, `[ -w ]` is true of every path
+# on the machine, so a check written that way would report a prefix full of
+# directories the user cannot write as ready to hand over.
+STATE=$(dotfiles_homebrew_prefix_state "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY" "$OWNER_UID")
 case $STATE in
   occupied)
     echo "ERROR: refusing to initialize $HOMEBREW_PREFIX." >&2
     dotfiles_homebrew_report_occupied "       " "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY"
+    exit 1
+    ;;
+  unusable)
+    echo "ERROR: refusing to initialize $HOMEBREW_PREFIX." >&2
+    dotfiles_homebrew_report_unusable "       " \
+      "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY" "$OWNER_UID"
     exit 1
     ;;
   managed)
@@ -105,51 +116,23 @@ user_only_chmod() {
   [ -d "$1" ] && [[ "$(get_permission "$1")" != 75[0145] ]]
 }
 
-exists_but_not_writable() {
-  [ -e "$1" ] && ! { [ -r "$1" ] && [ -w "$1" ] && [ -x "$1" ]; }
-}
-
-get_owner() {
-  "${STAT_PRINTF[@]}" "%u" "$1"
-}
-
-file_not_owned() {
-  [ "$(get_owner "$1")" != "${OWNER_UID}" ]
-}
-
-get_group() {
-  "${STAT_PRINTF[@]}" "%g" "$1"
-}
-
-file_not_grpowned() {
-  [ "$(get_group "$1")" != "${OWNER_GID}" ]
-}
-
 # --- the prefix ---------------------------------------------------------------
 
 echo "    creating $HOMEBREW_PREFIX and giving it to $OWNER_NAME:$OWNER_GROUP"
 
-# Kept relatively in sync with Homebrew's own Library/Homebrew/keg.rb. The URL
-# is deliberately not written out: tests/safety.test.sh fails any script this
-# repo runs whose text carries a Homebrew installer or clone URL, and that guard
-# is worth more than a convenient link. Homebrew's source is a flake input now,
-# and flake.nix is where its address belongs.
-directories=(
-  bin etc include lib sbin share opt var
-  Frameworks
-  etc/bash_completion.d lib/pkgconfig
-  share/aclocal share/doc share/info share/locale share/man
-  share/man/man1 share/man/man2 share/man/man3 share/man/man4
-  share/man/man5 share/man/man6 share/man/man7 share/man/man8
-  var/log var/homebrew var/homebrew/linked
-  bin/brew
-)
-group_chmods=()
-for dir in "${directories[@]}"; do
-  if exists_but_not_writable "${HOMEBREW_PREFIX}/${dir}"; then
-    group_chmods+=("${HOMEBREW_PREFIX}/${dir}")
-  fi
-done
+# Kept relatively in sync with Homebrew's own Library/Homebrew/keg.rb, with one
+# departure that is the point rather than a detail. Upstream's port also
+# collects every prefix directory that already exists and is not writable, and
+# chmods and chowns those to the user. That branch is deliberately absent here:
+# a directory this repository did not create belongs to whatever put it there,
+# and on a Mac an employer manages, taking it over is precisely the change this
+# repository exists not to make. Such a directory makes the prefix `unusable`,
+# the run refuses above, and the user is told which paths and why.
+#
+# The URL is deliberately not written out either: tests/safety.test.sh fails any
+# script this repo runs whose text carries a Homebrew installer or clone URL,
+# and that guard is worth more than a convenient link. Homebrew's source is a
+# flake input now, and flake.nix is where its address belongs.
 
 # zsh refuses to read from these directories if group writable
 directories=(share/zsh share/zsh/site-functions)
@@ -173,52 +156,21 @@ done
 
 user_chmods=()
 mkdirs_user_only=()
-if [ "${#zsh_dirs[@]}" -gt 0 ]; then
-  for dir in "${zsh_dirs[@]}"; do
-    if [ ! -d "${dir}" ]; then
-      mkdirs_user_only+=("${dir}")
-    elif user_only_chmod "${dir}"; then
-      user_chmods+=("${dir}")
-    fi
-  done
-fi
-
-chmods=()
-if [ "${#group_chmods[@]}" -gt 0 ]; then
-  chmods+=("${group_chmods[@]}")
-fi
-if [ "${#user_chmods[@]}" -gt 0 ]; then
-  chmods+=("${user_chmods[@]}")
-fi
-
-chowns=()
-chgrps=()
-if [ "${#chmods[@]}" -gt 0 ]; then
-  for dir in "${chmods[@]}"; do
-    if file_not_owned "${dir}"; then
-      chowns+=("${dir}")
-    fi
-    if file_not_grpowned "${dir}"; then
-      chgrps+=("${dir}")
-    fi
-  done
-fi
+for dir in "${zsh_dirs[@]}"; do
+  if [ ! -d "${dir}" ]; then
+    mkdirs_user_only+=("${dir}")
+  elif user_only_chmod "${dir}"; then
+    user_chmods+=("${dir}")
+  fi
+done
 
 if [ -d "${HOMEBREW_PREFIX}" ]; then
-  if [ "${#chmods[@]}" -gt 0 ]; then
-    "${CHMOD[@]}" "u+rwx" "${chmods[@]}"
-  fi
-  if [ "${#group_chmods[@]}" -gt 0 ]; then
-    "${CHMOD[@]}" "g+rwx" "${group_chmods[@]}"
-  fi
+  # Only ever the zsh directories, and only ones the refusal above has already
+  # established are this user's: zsh ignores a completions directory that is
+  # group writable, so one left that way by an earlier tool has to be tightened.
   if [ "${#user_chmods[@]}" -gt 0 ]; then
+    "${CHMOD[@]}" "u+rwx" "${user_chmods[@]}"
     "${CHMOD[@]}" "go-w" "${user_chmods[@]}"
-  fi
-  if [ "${#chowns[@]}" -gt 0 ]; then
-    "${CHOWN[@]}" "${OWNER_UID}" "${chowns[@]}"
-  fi
-  if [ "${#chgrps[@]}" -gt 0 ]; then
-    "${CHGRP[@]}" "${OWNER_GID}" "${chgrps[@]}"
   fi
 else
   # The only branch that genuinely requires root, and the reason this script
@@ -242,9 +194,22 @@ if ! [ -d "${HOMEBREW_LIBRARY}" ]; then
 fi
 "${CHOWN[@]}" "-R" "${OWNER_UID}:${OWNER_GID}" "${HOMEBREW_LIBRARY}"
 
-# Last, and only once everything above has succeeded. The marker is what every
-# later run reads to decide that this step is done, so writing it early would
-# turn a half-created prefix into one nothing ever finishes.
+# The handover, verified rather than assumed. The marker is what every later run
+# reads to decide that this step is done and that no password is needed again,
+# so it has to be PROOF THAT THE PREFIX IS THE USER'S and not a record that this
+# script reached the end. Writing it on a prefix that is not is what turned one
+# unhandable directory into a machine that could never be bootstrapped or rebuilt
+# again: bootstrap said "already set up", every switch said "not writable", and
+# nothing in between ever looked.
+UNUSABLE=$(dotfiles_homebrew_unusable \
+  "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY" "$OWNER_UID")
+if [ -n "$UNUSABLE" ]; then
+  echo "ERROR: $HOMEBREW_PREFIX was not handed over, so it is not marked." >&2
+  dotfiles_homebrew_report_unusable "       " \
+    "$HOMEBREW_PREFIX" "$HOMEBREW_LIBRARY" "$OWNER_UID"
+  exit 1
+fi
+
 "${TOUCH[@]}" "${HOMEBREW_PREFIX}/${DOTFILES_HOMEBREW_MARKER}"
 
 echo "    $HOMEBREW_PREFIX is ready; the rest of the setup needs no password"

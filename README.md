@@ -112,10 +112,18 @@ the newest thing here and the one most worth understanding.
 
 Homebrew's source is a pinned input of this flake, exactly like nixpkgs: a
 specific commit, recorded in `flake.lock`, unpacked into the Nix store. What
-`./bootstrap.sh` does on the machine is create the standard prefix and `chown`
-it to you - the same layout Homebrew's own installer creates, which is what
-makes prebuilt bottles and casks work. It never downloads and runs
-Homebrew's installer script, and it never leaves a git checkout in the prefix.
+`./bootstrap.sh` does on the machine is create the standard prefix's directories
+and `chown` **the ones it created** to you - the same layout Homebrew's own
+installer creates, which is what makes prebuilt bottles and casks work. It never
+downloads and runs Homebrew's installer script, and it never leaves a git
+checkout in the prefix.
+
+It stops one step short of Homebrew's installer, and on an Intel Mac that can
+matter. `/usr/local` is shared with everything else installed there, so some of
+those directories may already exist and belong to something else. Homebrew's
+installer takes those over; this does not. It tells you which paths they are and
+stops - before Nix is installed and before any password prompt - and you can
+give them to your account yourself if you want to continue.
 
 If the prefix already contains a Homebrew this repository did not put there,
 **nothing happens**. `./bootstrap.sh` stops before Nix is installed and before

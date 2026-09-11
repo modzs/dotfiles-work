@@ -100,6 +100,65 @@ DOTFILES_HOMEBREW_MARKER=".managed_by_nix_darwin"
 # nix-homebrew's name, and it says out loud what it is to anyone who finds it.
 DOTFILES_HOMEBREW_REPOSITORY_DIR=".homebrew-is-managed-by-nix"
 
+# --- can this account use the prefix ------------------------------------------
+
+# The directories a usable prefix holds, and which have to belong to the account
+# this configuration is set up for. Homebrew's own list of what its installer
+# creates, minus the prefix directory itself: that one is left root-owned on
+# purpose - `install -d -o root -g wheel` is what creates it - and it is the
+# contents that have to be the user's.
+dotfiles_homebrew_prefix_directories() {
+  local prefix=$1 dir
+  for dir in bin etc include lib sbin share var opt \
+    share/zsh share/zsh/site-functions \
+    var/homebrew var/homebrew/linked \
+    Cellar Caskroom Frameworks; do
+    printf '%s\n' "$prefix/$dir"
+  done
+}
+
+# The paths a prefix already holds that the account cannot use, one per line, or
+# nothing at all.
+#
+# A path that is not there yet is not a problem: the privileged step creates the
+# ones it needs and hands those over. A path that is there and is somebody
+# else's is, because this repository will not take ownership of a directory it
+# did not create. Homebrew's own installer will - it chmods and chowns whatever
+# it finds in the prefix - and that is the one place this port deliberately
+# stops short of it. On a Mac an employer manages, reassigning directories that
+# were already there is not a setup script's decision to make.
+#
+# $3 is the uid to judge against, and defaults to the invoking account. The
+# privileged step has to pass the owner's uid explicitly: it runs as root, for
+# whom every bash access test succeeds, so `[ -w ]` there would answer yes about
+# a directory the user cannot write. Ownership and mode are read instead, which
+# gives the same answer whoever asks.
+dotfiles_homebrew_unusable() {
+  local prefix=$1 library=$2 uid=${3:-} path info owner mode
+  [ -n "$uid" ] || uid=$(id -u)
+  { dotfiles_homebrew_prefix_directories "$prefix"; printf '%s\n' "$library"; } \
+    | while IFS= read -r path; do
+        [ -e "$path" ] || continue
+        info=$(/usr/bin/stat -f '%u %Sp' "$path" 2>/dev/null) || {
+          printf '%s\n' "$path"
+          continue
+        }
+        owner=${info%% *}
+        mode=${info#* }
+        if [ "$owner" != "$uid" ]; then
+          printf '%s\n' "$path"
+          continue
+        fi
+        # The owner's rwx, read off the symbolic mode rather than computed from
+        # the octal one, so a directory carrying a sticky or setgid bit does not
+        # shift the digits out from under a comparison.
+        case $mode in
+          ?rwx*) ;;
+          *) printf '%s\n' "$path" ;;
+        esac
+      done
+}
+
 # --- is what is there ours ----------------------------------------------------
 
 # True when $1 is a symlink pointing into the Nix store, which is the only shape
@@ -145,22 +204,34 @@ dotfiles_homebrew_occupants() {
   fi
 }
 
-# What state the prefix at $1 (with library $2) is in. Prints exactly one word:
+# What state the prefix at $1 (with library $2) is in, judged for the account
+# whose uid is $3 (the invoking one by default). Prints exactly one word:
 #
 #   occupied  something that is not ours is in the way. Never converted, never
 #             migrated, never deleted - the run stops and says what it found.
-#   managed   the marker is there, so the privileged setup has already run and
-#             must not run again.
-#   fresh     neither. The prefix may not exist at all, or may exist and be
-#             empty of Homebrew, which is the normal state of /usr/local on any
-#             Mac.
+#   unusable  the prefix holds directories that are not this account's, so it
+#             cannot be handed over without taking ownership of something this
+#             repository did not create. Also the run stops.
+#   managed   the marker is there and the prefix really is the account's, so the
+#             privileged setup has already run and must not run again.
+#   fresh     none of those. The prefix may not exist at all, or may exist and
+#             be empty of Homebrew, which is the normal state of /usr/local on
+#             any Mac.
 #
 # Occupancy is tested first, because a prefix carrying both the marker and a
-# foreign Homebrew is a prefix nothing here may write to.
+# foreign Homebrew is a prefix nothing here may write to. Usability is tested
+# before the marker, and that order is the fix for a loop rather than a detail:
+# deciding `managed` from the marker alone reported a prefix nothing could write
+# to as finished, so bootstrap.sh said "already set up; no password needed" and
+# skipped the only step that looks at it, while every switch afterwards failed.
 dotfiles_homebrew_prefix_state() {
-  local prefix=$1 library=$2
+  local prefix=$1 library=$2 uid=${3:-}
   if [ -n "$(dotfiles_homebrew_occupants "$prefix" "$library")" ]; then
     printf 'occupied\n'
+    return 0
+  fi
+  if [ -n "$(dotfiles_homebrew_unusable "$prefix" "$library" "$uid")" ]; then
+    printf 'unusable\n'
     return 0
   fi
   if [ -e "$prefix/$DOTFILES_HOMEBREW_MARKER" ]; then
@@ -191,6 +262,31 @@ dotfiles_homebrew_report_occupied() {
   echo "${indent}If you want this repository to manage Homebrew on this Mac," >&2
   echo "${indent}uninstall the existing one yourself first - Homebrew documents" >&2
   echo "${indent}how at https://docs.brew.sh/FAQ - and run ./bootstrap.sh again." >&2
+}
+
+# What to tell a user whose prefix cannot be handed to their account. The same
+# news as the one above and told the same way, for the same reason: these two
+# refusals reach a user at the same three moments, and phrasing them differently
+# would make one of them look like a different kind of problem.
+#
+# $1 is the indent, $2 the prefix, $3 the library, $4 the uid to judge against.
+dotfiles_homebrew_report_unusable() {
+  local indent=$1 prefix=$2 library=$3 uid=${4:-} path
+  echo "${indent}$prefix already holds directories that do not belong to your" >&2
+  echo "${indent}account. They are in the way at:" >&2
+  dotfiles_homebrew_unusable "$prefix" "$library" "$uid" | while IFS= read -r path; do
+    echo "${indent}  $path" >&2
+  done
+  echo "${indent}" >&2
+  echo "${indent}Nothing has been changed. This repository creates the" >&2
+  echo "${indent}directories Homebrew needs and gives those to you; it never" >&2
+  echo "${indent}takes over one that was already somebody else's - on a Mac you" >&2
+  echo "${indent}share with software you did not install, reassigning a" >&2
+  echo "${indent}directory out from under it is not a setup script's decision." >&2
+  echo "${indent}" >&2
+  echo "${indent}If you want this repository to manage Homebrew on this Mac," >&2
+  echo "${indent}give those directories to your own account first - HOW-TO.md" >&2
+  echo "${indent}says how - and run ./bootstrap.sh again." >&2
 }
 
 # --- the unprivileged half, which activation runs -----------------------------
@@ -229,6 +325,18 @@ dotfiles_homebrew_prefix_link() {
     return 1
   fi
 
+  # Ownership, asked as the only question that matters: are the directories this
+  # writes into this account's. A prefix set up for somebody else carries the
+  # marker and is still unusable, and finding that out here - with a sentence
+  # about where the fix is - beats a bare "Permission denied" from ln. The
+  # question is asked by the state machine rather than again here, so there is
+  # one definition of the answer and bootstrap.sh cannot reach a different one.
+  if [ "$state" = unusable ]; then
+    echo "dotfiles-work: refusing to touch $prefix." >&2
+    dotfiles_homebrew_report_unusable "       " "$prefix" "$library"
+    return 1
+  fi
+
   if [ "$state" != managed ]; then
     echo "dotfiles-work: $prefix has not been set up yet, so Homebrew cannot" >&2
     echo "       be installed into it." >&2
@@ -236,23 +344,6 @@ dotfiles_homebrew_prefix_link() {
     echo "       Creating that prefix is the one thing this configuration needs" >&2
     echo "       a password for, so it happens once, in ./bootstrap.sh, and" >&2
     echo "       never during a rebuild. Run ./bootstrap.sh on this Mac." >&2
-    return 1
-  fi
-
-  # Ownership, asked as the only question that matters: can this user write the
-  # two directories the links go in. A prefix set up for somebody else carries
-  # the marker and is still unusable, and finding that out here - with a
-  # sentence about where the fix is - beats a bare "Permission denied" from ln.
-  if [ ! -d "$library" ] || [ ! -w "$library" ]; then
-    echo "dotfiles-work: $library is not writable by $(whoami)." >&2
-    echo "       $prefix carries the marker that says it was set up for a" >&2
-    echo "       Nix-managed Homebrew, but not for this account." >&2
-    echo "       Re-run ./bootstrap.sh, which will say what it finds." >&2
-    return 1
-  fi
-  if [ ! -d "$prefix/bin" ] || [ ! -w "$prefix/bin" ]; then
-    echo "dotfiles-work: $prefix/bin is not writable by $(whoami)." >&2
-    echo "       Re-run ./bootstrap.sh, which will say what it finds." >&2
     return 1
   fi
 
@@ -357,6 +448,18 @@ dotfiles_homebrew_preflight() {
     occupied)
       echo "ERROR: this Mac already has a Homebrew of its own." >&2
       dotfiles_homebrew_report_occupied "       " "$prefix" "$library"
+      echo "       Nothing has been installed yet, so stopping here costs you" >&2
+      echo "       nothing." >&2
+      return 1
+      ;;
+    unusable)
+      # Honest here in a way it cannot be later: the preflight runs as the user,
+      # so it is asking about the account that will actually own the prefix. The
+      # privileged step asks the same question, but as root, where every access
+      # test says yes - which is why the answer is read off ownership and mode
+      # rather than off `[ -w ]`.
+      echo "ERROR: this Mac's Homebrew prefix cannot be given to your account." >&2
+      dotfiles_homebrew_report_unusable "       " "$prefix" "$library"
       echo "       Nothing has been installed yet, so stopping here costs you" >&2
       echo "       nothing." >&2
       return 1

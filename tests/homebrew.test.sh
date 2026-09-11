@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 21
+dotfiles_test_expect 23
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -562,6 +562,95 @@ test_the_privileged_step_refuses_a_homebrew_it_did_not_install() {
     "the refusal does not say what the user can do about it"
 
   pass "prefix: the privileged step refuses an existing Homebrew and leaves it exactly as it is"
+}
+
+# A directory inside the prefix that the run cannot hand to the account.
+#
+# The real shape of this is an Intel Mac whose /usr/local/bin already exists
+# root:wheel, because something else installed there first - and that cannot be
+# built in a test, because creating a root-owned directory needs root and no
+# test here may have it. A directory whose mode denies its own owner write is
+# the same condition reached unprivileged: the run cannot write it, and taking
+# it over is the thing this repository refuses to do.
+#
+# Both are decided by the same code and the same question - ownership and mode,
+# read with stat rather than with `[ -w ]` - which is what makes one stand in
+# for the other. `[ -w ]` is exactly what does not work: the privileged step
+# runs as root, for whom it is true of every path on the machine, which is how
+# this shipped broken in the first place.
+dotfiles_unhandable_dir() {
+  mkdir -p "$1" || fail "could not create the fixture directory $1"
+  chmod 0500 "$1" || fail "could not take write permission off $1"
+}
+
+test_the_privileged_step_refuses_a_prefix_it_cannot_hand_over() {
+  local prefix output status=0
+
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_unhandable_dir "$prefix/bin"
+
+  output=$(dotfiles_run_initializer "$prefix") || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the initializer accepted a prefix holding a directory it cannot hand over"
+
+  # The clause that closes the loop, and the reason this is a regression rather
+  # than a nicety. The marker means "set up, no password needed ever again", so
+  # leaving one on a prefix that was never handed over made bootstrap.sh report
+  # success and every switch afterwards fail, with no way out of either.
+  [ ! -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the initializer marked a prefix it could not hand over"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    unusable "a prefix the initializer refused is still reported as something a rebuild could use"
+
+  # And it refused before writing, not after.
+  [ ! -d "$prefix/Cellar" ] \
+    || fail "the initializer built out a prefix it then refused"
+
+  assert_contains "$output" "$prefix/bin" \
+    "the refusal does not name the directory that is in the way"
+  assert_contains "$output" "Nothing has been changed" \
+    "the refusal does not say that nothing was changed"
+  assert_contains "$output" "./bootstrap.sh" \
+    "the refusal does not say what the user can do about it"
+
+  chmod 0755 "$prefix/bin"
+
+  pass "prefix: the privileged step refuses a prefix it cannot hand over, and leaves it unmarked"
+}
+
+test_a_marked_prefix_this_account_cannot_use_is_not_managed() {
+  local prefix output status=0
+
+  # A prefix that really was set up - by this repository, with the marker to
+  # prove it - and has since stopped being usable by this account. The shape
+  # that matters in the field is a prefix marked for a different user.
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    managed "the fixture prefix was not managed to begin with, so this proves nothing"
+
+  chmod 0500 "$prefix/bin" || fail "could not take write permission off the fixture bin"
+
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    unusable "a marked prefix this account cannot write is still reported as managed"
+
+  # Which is what stops the loop: the preflight is the branch that used to print
+  # "already set up; no password needed" and move on, leaving the switch to fail
+  # and send the user back to bootstrap.sh for ever.
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
+    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  [ "$status" != 0 ] \
+    || fail "the preflight accepted a marked prefix this account cannot use"
+  assert_not_contains "$output" "already set up" \
+    "the preflight reported a prefix this account cannot use as finished"
+  assert_contains "$output" "$prefix/bin" \
+    "the preflight does not name the directory that is in the way"
+
+  chmod 0755 "$prefix/bin"
+
+  pass "prefix: a marked prefix this account cannot use is refused rather than called managed"
 }
 
 test_the_prefix_setup_step_links_homebrew_without_root() {
@@ -1241,6 +1330,8 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written
 test_the_privileged_step_creates_the_prefix_and_marks_it
 test_the_privileged_step_does_nothing_the_second_time
 test_the_privileged_step_refuses_a_homebrew_it_did_not_install
+test_the_privileged_step_refuses_a_prefix_it_cannot_hand_over
+test_a_marked_prefix_this_account_cannot_use_is_not_managed
 test_the_prefix_setup_step_links_homebrew_without_root
 test_the_prefix_setup_step_refuses_a_prefix_bootstrap_has_not_prepared
 test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install

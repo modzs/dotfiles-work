@@ -85,10 +85,24 @@ exception - this repo must never:
 
 One consequence worth knowing before changing anything on an Intel Mac:
 `/usr/local` already exists on every Mac and is shared with everything else
-installed there, so initializing that prefix chowns `bin`, `lib`, `share` and
-their siblings to the user. That is exactly what Homebrew's own installer does,
-and it is why `/usr/local` is named in the rule above rather than excluded from
-it.
+installed there, and initializing that prefix creates `bin`, `lib`, `share` and
+their siblings and chowns **the ones it created** to the user. That is why
+`/usr/local` is named in the rule above rather than excluded from it.
+
+It is also where this port stops short of Homebrew's own installer, which chmods
+and chowns whatever it finds already in the prefix. A directory that is there
+and is not the user's makes the prefix `unusable`: the run refuses and names the
+paths, at the preflight, again as root, and again in the activation step. There
+is no branch that takes one over, and adding one would be the same mistake as
+`autoMigrate`. The check reads ownership and mode with `stat` rather than asking
+`[ -w ]`, because the privileged step runs as root, for whom `[ -r ]`, `[ -w ]`
+and `[ -x ]` are true of every path that exists - a probe written that way
+answered "writable" about directories the user could not touch, and the marker
+went down anyway, which left a prefix that could never be bootstrapped or rebuilt
+again. The marker is now written **only after the handover is verified**, so it
+is proof that the prefix is the user's rather than a record that the script
+reached the end, and `dotfiles_homebrew_prefix_state` will not say `managed`
+about a prefix the invoking account cannot use however many markers it carries.
 
 The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
@@ -126,10 +140,12 @@ counts as an invocation unless something makes it an argument, and the list of
 those is short and belongs to this repo. The earlier shape asked the opposite,
 listing the tokens after which `brew` counted as a command, and `if brew`,
 `while brew`, `exec brew` and `command brew` all walked through the gaps in that
-list. The newest entry on the argument list is a bash array literal, which
-`lib/homebrew-initialize-prefix.sh` needs because Homebrew's own list of prefix
-directories contains `bin/brew`; a nested command substitution opens a group of
-its own, so `dirs=( $(brew list) )` is still caught. Its remaining edge is
+list. The newest entry on the argument list is a bash array literal, which the
+ported prefix-directory lists needed while one of them still carried `bin/brew`
+(`lib/homebrew-initialize-prefix.sh` no longer does, since the branch that
+chowned pre-existing directories is gone, but the rule stays - the lists are
+upstream's and move); a nested command substitution opens a group of its own, so
+`dirs=( $(brew list) )` is still caught. Its remaining edge is
 indirection: a path held in a variable and run as `"$BREW" install` is still
 invisible to it. What keeps that from mattering is that no script here holds such
 a path - the preflight reports what it found instead of returning it - not that
@@ -143,9 +159,15 @@ explanation, or if a tool ends up installed by both Nix and Homebrew. It runs th
 prefix steps against a stand-in prefix in a temp directory - created, marked,
 re-run, linked, re-linked - and fails if an existing Homebrew is touched, if a
 second run rewrites the marker, if the unprivileged step needs root, or if it
-tries instead of refusing when the prefix is not ready. The stand-in is possible
-because the library takes the prefix as an argument; there is no environment
-variable that moves it, and there must not be one.
+tries instead of refusing when the prefix is not ready. Two of those checks are
+about the prefix it may not have: a directory the run cannot hand over must make
+it refuse **and leave no marker**, and a marked prefix the invoking account
+cannot use must not come back `managed`. They reach that state with a mode that
+denies its own owner write, because creating a root-owned directory would need
+root and no test here may have it - the code decides both by ownership and mode,
+so one stands in for the other. The stand-in prefix is possible because the
+library takes the prefix as an argument; there is no environment variable that
+moves it, and there must not be one.
 
 Two questions about "where is Homebrew" live in this repo, they are genuinely
 different, and each now has exactly one implementation. **Where this
