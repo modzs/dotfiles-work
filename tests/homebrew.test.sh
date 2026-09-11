@@ -404,7 +404,10 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
 # There is no test that a failed Homebrew step still leaves the font installed.
 # The check above pins the ORDER that protects that outcome; it does not pin the
 # outcome. That gap is deliberate and it should stay visible rather than be
-# papered over.
+# papered over. (That the font is installed at all, and under the name
+# wezterm.lua asks for, is pinned - in tests/packages.test.sh, off the built
+# artifact rather than off an activation. It is this failure mode, and only
+# this one, that stays untested.)
 #
 # A test for the outcome would have to run a real activation, and one was
 # written and then removed. The reasons it cannot come back:

@@ -143,6 +143,45 @@ install_report_reachability_note() {
   printf '%s  ~/.nix-profile/bin/rg --version\n' "$indent"
 }
 
+# --- and the other half? ------------------------------------------------------
+#
+# The Homebrew counterpart to install_report_reachability_note, and deliberately
+# not the same shape. That one PROBES: it starts a login shell and looks at the
+# PATH it really gets. This one cannot, and must not pretend to. Nothing here
+# reads Homebrew's environment, and the note at the bottom of install_report
+# says why assuming in Homebrew's favour would be the one thing this file must
+# not do.
+#
+# So it reports the one thing that is certain and needs no probe - that nothing
+# in this repository writes a PATH line for Homebrew, exactly as nothing writes
+# one for Nix - and then points at the same two places the Nix half points at:
+# the command that fixes it, and the document that explains it.
+#
+# Written because the omission read as an answer. A report that probes one of
+# the two package managers it just used and says nothing at all about the other
+# leaves a user who cannot find `brew` with no thread to pull, while the user
+# who cannot find `rg` gets a paragraph, a file to look at and a workaround.
+#
+# $2 is the prefix, passed in rather than worked out. Which prefix this
+# architecture uses is lib/homebrew-present.sh's question and has exactly one
+# implementation; a second one here would be a second answer waiting to
+# disagree. Absent, the line is printed with a placeholder rather than guessed.
+install_report_homebrew_path_note() {
+  local indent=$1 prefix=${2:-}
+  [ -n "$prefix" ] || prefix='<prefix>'
+  printf '\n'
+  printf '%sThe same goes for Homebrew, and this did not check that half: the\n' "$indent"
+  printf '%sprobe above looks at ~/.nix-profile/bin and nothing else. Nothing\n' "$indent"
+  printf '%shere writes a PATH line for Homebrew either, and the prefix was set\n' "$indent"
+  printf '%sup by a script, so nothing has ever printed you one. If a new\n' "$indent"
+  printf '%sterminal cannot find the names on the Homebrew list, add to\n' "$indent"
+  printf '%s~/.zprofile:\n' "$indent"
+  printf '%s  eval "\044(%s/bin/brew shellenv)"\n' "$indent" "$prefix"
+  printf '\n'
+  printf '%sThe casks are unaffected - they are applications in /Applications.\n' "$indent"
+  printf '%sHOW-TO.md says the same under Troubleshooting.\n' "$indent"
+}
+
 # The one state a successful switch can leave behind that produces no error
 # anywhere: a profile with nothing in it. Both entry points can find it, so
 # both say it the same way.
@@ -156,9 +195,11 @@ install_report_empty_profile_warning() {
 
 # --- the report ---------------------------------------------------------------
 
-# $1 is an optional indent so bootstrap.sh's step margin is preserved.
+# $1 is an optional indent so bootstrap.sh's step margin is preserved. $2 is
+# the Homebrew prefix, for the note that points at it; the report is still
+# complete without it.
 install_report() {
-  local indent=${1:-}
+  local indent=${1:-} prefix=${2:-}
   local count
   count=$(install_report_tool_count)
 
@@ -238,10 +279,11 @@ install_report() {
   printf '%s    the application casks to /Applications, where Spotlight finds\n' "$indent"
   printf '%s    them like any other app.\n' "$indent"
   printf '%s  - Homebrew came from here too, pinned by flake.lock, and it\n' "$indent"
-  printf '%s    cannot update itself. It is not on this shell PATH either;\n' "$indent"
-  printf '%s    add its own line to ~/.zprofile if you want brew there.\n' "$indent"
+  printf '%s    cannot update itself. It is not on this shell PATH either.\n' "$indent"
   printf '%s    Nothing here ever asks it to remove anything. README.md is\n' "$indent"
   printf '%s    exact about what those steps do and do not do.\n' "$indent"
+
+  install_report_homebrew_path_note "$indent" "$prefix"
 
   install_report_zshrc_backup "$indent"
 

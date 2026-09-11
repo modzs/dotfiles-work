@@ -37,7 +37,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 11
+dotfiles_test_expect 12
 
 # A home directory that looks like one bootstrap.sh has just finished with: a
 # profile carrying a few tools. Echoes the path.
@@ -113,6 +113,39 @@ test_the_report_says_what_was_installed_and_where() {
     "the report still claims this repo never installs Homebrew, which is no longer true"
 
   pass "report: says what was installed, where it went, and why this shell cannot see it"
+}
+
+test_the_report_points_at_the_homebrew_path_line_too() {
+  local home output
+  home=$(install_report_fixture_home)
+  install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
+
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
+  install_report_restore_probe
+
+  # The omission this closes: the report probed the Nix half and pointed the
+  # user at a fix when it failed, and said nothing at all about whether their
+  # shell can see the Homebrew half. Silence about one of two package managers
+  # reads as an answer, and the answer it reads as is "fine".
+  # shellcheck disable=SC2016  # the literal the report prints, not an expansion
+  assert_contains "$output" 'eval "$(/stand-in/prefix/bin/brew shellenv)"' \
+    "the report should give the line that puts Homebrew on PATH, naming the real prefix"
+  assert_contains "$output" "did not check that half" \
+    "the report must say the Homebrew half was not probed, rather than implying it was"
+
+  # The line this file must never print. Nothing here reads Homebrew's
+  # environment, so the report may not say it is reachable - the same bound the
+  # Nix half observes by probing before it claims anything.
+  assert_not_contains "$output" "Homebrew's tools are already" \
+    "the report claims Homebrew is reachable, which nothing here has checked"
+
+  # And without a prefix - the shape every other test calls it in - the report
+  # is still complete, with a placeholder rather than a guess.
+  output=$(HOME="$home" install_report "    ")
+  assert_contains "$output" "<prefix>/bin/brew shellenv" \
+    "with no prefix given, the report should print a placeholder rather than guess one"
+
+  pass "report: the Homebrew half gets the same pointer the Nix half gets"
 }
 
 test_an_empty_profile_is_reported_as_a_broken_install() {
@@ -395,6 +428,7 @@ test_the_probe_does_not_inherit_this_process_path() {
 }
 
 test_the_report_says_what_was_installed_and_where
+test_the_report_points_at_the_homebrew_path_line_too
 test_an_empty_profile_is_reported_as_a_broken_install
 test_only_a_profile_proven_empty_fails_the_run
 test_the_report_mentions_the_zshrc_backup_only_when_there_is_one

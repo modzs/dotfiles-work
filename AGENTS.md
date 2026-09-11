@@ -376,6 +376,15 @@ documents that seam.
   read and rewritten; both scripts and the tests go through it. The architecture
   is deliberately **not** adjustable - both Darwin systems are built from the
   same source and the scripts detect which one they are on.
+  Its write commits by **renaming a temp file created beside the target**, and
+  all three parts of that carry weight: a copy over the original truncates
+  first, so an interruption leaves the user an empty `flake.nix` and no
+  configuration; a rename takes the temp file's permissions, so the target's
+  mode is copied across explicitly; and it lands on the path
+  `flake_settings_resolve` returns, so a symlinked `flake.nix` is written
+  through rather than replaced. Beside the target because a rename is only
+  atomic within one filesystem. `tests/flake-settings.test.sh` holds all three,
+  the atomicity one by inode - an in-place rewrite keeps it, a rename does not.
 - Wherever a script offers a default, the default must be the **machine's current
   reality**, never the value already in the config. The repo this one replaces
   offered its configured machine name as the default, so pressing Enter silently

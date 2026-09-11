@@ -256,5 +256,8 @@ git_identity_report "    "
 # visible from the shell this ran in. Both are expected states, and the moment
 # to say so is here. The closing headline is the report's too: it is what knows
 # whether anything landed, and it prints "==> Done." only when something did.
+# The prefix goes with it, so the note about Homebrew's own PATH line can name
+# the real path rather than a placeholder. It is the one this run resolved at
+# the top, not a second answer to that question.
 # See lib/install-report.sh.
-install_report "    "
+install_report "    " "$HOMEBREW_PREFIX_PATH"
