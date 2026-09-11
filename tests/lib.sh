@@ -233,3 +233,49 @@ dotfiles_brew_bundle_script() {
   [ -n "$found" ] || return 1
   printf '%s\n' "$found"
 }
+
+# The Homebrew prefix the built activate script PASSES to that step.
+#
+# Read out of the same artifact and for the same reason. The step takes the
+# prefix it manages as an argument rather than having it baked in, which is what
+# lets the stand-in runs point it at a temp directory - but it also moved the
+# real value out of the script and onto this one line, where nothing looked at
+# it. Dropping the argument, or passing the library path instead of the prefix
+# (one identifier away in the same let-block), left the whole suite green while
+# every real switch died at its last step.
+dotfiles_brew_bundle_argument() {
+  local generation=$1 found
+  found=$(sed -n \
+    's|^run /nix/store/[a-z0-9]*-dotfiles-work-brew-bundle \(.*\)$|\1|p' \
+    "$generation/activate" | head -n1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# The store path of the Homebrew prefix-setup step, found the same way and for
+# the same reason: only its presence in the built activate script proves that
+# the script the tests exercise is the one activation runs.
+dotfiles_homebrew_prefix_script() {
+  local generation=$1 found
+  found=$(grep -o '/nix/store/[a-z0-9]*-dotfiles-work-homebrew-prefix' "$generation/activate" \
+    | head -n1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# The two store FILES the prefix-setup step names, one per line: the shared
+# library it sources, then the generated bin/brew it links. Read back out of
+# the script rather than rebuilt from a Nix expression, so what the tests look
+# at is what activation actually uses.
+#
+# The patched Homebrew tree it also names is deliberately not returned. That is
+# a directory holding all of upstream Homebrew, and a caller scanning it would
+# be reading Homebrew's source rather than this repository's output.
+dotfiles_homebrew_prefix_script_files() {
+  local script=$1 library binary
+  library=$(sed -n 's|^\. \(/nix/store/[^ ]*\)$|\1|p' "$script" | head -n1)
+  binary=$(sed -n 's|^bin_brew="\(.*\)"$|\1|p' "$script" | head -n1)
+  [ -n "$library" ] || return 1
+  [ -n "$binary" ] || return 1
+  printf '%s\n%s\n' "$library" "$binary"
+}

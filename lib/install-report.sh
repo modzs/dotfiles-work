@@ -209,13 +209,14 @@ install_report() {
   # tells the user something is on their PATH without having checked.
   #
   # The Homebrew half is outside that: nothing here probes it, and it is not
-  # safely assumable either. Homebrew's installer prints the `brew shellenv`
-  # lines rather than writing them to a profile, and the preflight that let
-  # this run get here asks only whether `brew` exists at a prefix - never
-  # whether it is on PATH. So a Mac can reach this point with Homebrew's tools
-  # installed and invisible to the shell, which is why HOW-TO.md carries a
-  # troubleshooting entry for exactly that. A friendly "and Homebrew's are
-  # already reachable" here would be the one thing this file must not do.
+  # safely assumable either. It is LESS assumable than it used to be, not more.
+  # A hand-installed Homebrew at least prints the `brew shellenv` lines for the
+  # user to paste; the prefix this configuration creates is set up by a script,
+  # so nothing has ever told the user that line exists. Nothing here writes it
+  # for them either - a login shell's PATH is not this repository's to edit -
+  # which is why HOW-TO.md carries a troubleshooting entry for exactly that. A
+  # friendly "and Homebrew's are already reachable" here would be the one thing
+  # this file must not do.
   printf '%sNone of the Nix tools above is on THIS terminal PATH. Nix only adds\n' "$indent"
   printf '%sitself to shells that start after it was installed, so this shell -\n' "$indent"
   printf '%sthe one you ran ./bootstrap.sh from - cannot see any of them, and\n' "$indent"
@@ -236,10 +237,11 @@ install_report() {
   printf '%s    names on the Homebrew list went into the Homebrew prefix, and\n' "$indent"
   printf '%s    the application casks to /Applications, where Spotlight finds\n' "$indent"
   printf '%s    them like any other app.\n' "$indent"
-  printf '%s  - This installs no Homebrew and never will. It only asks the one\n' "$indent"
-  printf '%s    you installed yourself to add what the list names, and it\n' "$indent"
-  printf '%s    never asks it to remove anything. README.md is exact about\n' "$indent"
-  printf '%s    what that step does and does not do.\n' "$indent"
+  printf '%s  - Homebrew came from here too, pinned by flake.lock, and it\n' "$indent"
+  printf '%s    cannot update itself. It is not on this shell PATH either;\n' "$indent"
+  printf '%s    add its own line to ~/.zprofile if you want brew there.\n' "$indent"
+  printf '%s    Nothing here ever asks it to remove anything. README.md is\n' "$indent"
+  printf '%s    exact about what those steps do and do not do.\n' "$indent"
 
   install_report_zshrc_backup "$indent"
 

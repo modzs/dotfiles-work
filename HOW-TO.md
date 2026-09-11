@@ -4,24 +4,26 @@ Task-shaped answers for the things you will actually want to do. For what this
 repository is and what it deliberately does not touch, read
 [README.md](README.md) first.
 
-Everything this repository runs runs as you, never as root, and neither
-`./bootstrap.sh` nor `./rebuild.sh` asks you for a password in its own code.
-Two prompts can still appear, and both come from something this repo runs rather
-than from this repo:
+`./bootstrap.sh` asks for your password **twice**. `./rebuild.sh` asks for none,
+and everything a rebuild does runs as you. The two prompts are:
 
-- `./bootstrap.sh` step 1 installs Nix, and the Determinate installer it runs
-  asks for a password. That is the single sudo in the whole setup, and the
-  script says so as it happens.
-- a rebuild can prompt if a cask on the list has to replace an application you
-  do not own - one your employer's management software deployed. Homebrew cannot
-  remove that as you, so it falls back to taking ownership with `sudo`. See
-  README.md, which is exact about when this happens.
+- **step 1**, which installs Nix. The prompt comes from the Determinate
+  installer this repo runs, not from this repo, and the script says so as it
+  happens.
+- **step 5**, which creates Homebrew's prefix - `/opt/homebrew` or `/usr/local` -
+  and hands it to your account. This is the only `sudo` in the repository. It
+  runs once: every later rebuild finds the prefix already yours and needs no
+  privilege at all. The script announces exactly what it is about to do before
+  asking.
+
+One more prompt can appear later, and it is Homebrew's rather than this repo's: a
+rebuild can prompt if a cask on the list has to replace an application you do not
+own - one your employer's management software deployed. Homebrew cannot remove
+that as you, so it falls back to taking ownership with `sudo`. See README.md,
+which is exact about when this happens.
 
 A password prompt from anywhere else means something is wrong - stop and check
-what you are running. Homebrew is the one thing this file asks you to install
-beforehand, and its installer asks for a password too - again its own, which is
-exactly why installing it is your decision rather than a step this repo takes
-for you.
+what you are running.
 
 ---
 
@@ -37,10 +39,16 @@ configured shell and editor, git, two terminal emulators and a handful of
 command-line tools. Most of it comes from nixpkgs, pinned by `flake.lock`; a
 short list of formulae and casks comes from Homebrew instead.
 
-**You do not get a Homebrew.** This repository never installs a system package
-manager and never will - that is the whole reason it is separate from a
-personal dotfiles repo. It drives the Homebrew *you* installed, and
-`./bootstrap.sh` refuses to start on a Mac that has none.
+**You get a Homebrew, and it is a pinned one.** `./bootstrap.sh` creates
+Homebrew's standard prefix and installs the exact version `flake.lock` records.
+Its code lives in the Nix store, so it cannot update itself - `brew upgrade`
+still upgrades your packages, but Homebrew the program moves only when the pin
+does.
+
+**You do not get to keep an existing Homebrew.** If the standard prefix already
+holds one this repo did not install, `./bootstrap.sh` stops before anything is
+installed and tells you what it found. It will not convert it, migrate it or
+delete it. Removing it first is your call.
 
 Two things are worth knowing before you go looking, and both are normal:
 
@@ -54,20 +62,8 @@ really got installed. `bootstrap.sh` prints both when it finishes.
 
 ### The setup
 
-**First, install Homebrew** - this repo does not, and will not. Follow
-[brew.sh](https://brew.sh). Its installer asks for your password and writes
-outside your home directory, which is exactly why the decision is yours and not
-this repository's. This step is not optional: if you are not free to make that
-decision on this Mac, this repo is not usable as it stands. See "There is no way
-to turn the Homebrew part off" below.
-
-Check that it worked, in a new terminal:
-
-```sh
-brew --version
-```
-
-Then:
+You need admin rights on the Mac. If you are not free to install software on it,
+this repo is not usable as it stands.
 
 ```sh
 git clone https://github.com/modzs/dotfiles-work.git ~/.dotfiles
@@ -81,7 +77,16 @@ bootstrapped from has neither `nix` nor any of the new tools - and `./rebuild.sh
 will refuse to run there. This catches nearly everyone once.
 
 `bootstrap.sh` is safe to run twice. Every step checks the machine's current
-state first and skips what is already done.
+state first and skips what is already done - including the Homebrew prefix, which
+it recognises by a marker file it left behind. A second run normally asks for no
+password at all: Nix is already installed and the prefix is already yours.
+
+Afterwards, add Homebrew's own line to `~/.zprofile` so your shell can find what
+it installs. Nothing here writes that for you:
+
+```sh
+eval "$(/opt/homebrew/bin/brew shellenv)"   # /usr/local/bin/brew on Intel
+```
 
 ---
 
@@ -104,13 +109,16 @@ is a *dependency*: when Homebrew installs something new off the lists, it may
 upgrade an outdated library that install needs. Nothing here asks it to, and
 nothing on the lists is upgraded just for being there.
 
-The Homebrew step runs on every rebuild, not only when the lists change, so a
-rebuild does need the network. Even when everything on the lists is already
-installed it still asks Homebrew, and asking is not free: unless you have
-exported `HOMEBREW_NO_AUTO_UPDATE` yourself, Homebrew may update its own
-checkout and taps before answering, the same as it would on any `brew install`.
-This repo neither sets that variable nor clears it, and it never runs
-`brew update` itself.
+Two Homebrew steps run on every rebuild, in this order. The first points the
+prefix at the Homebrew in the Nix store - two symlinks and a stub repository
+directory, no network, no password. The second hands over the Brewfile, and that
+one does need the network even when everything on the lists is already
+installed.
+
+What a rebuild cannot do is change Homebrew itself: its code is a read-only
+symlink into the store, the self-update path is patched out, and `brew update`
+has nothing to fast-forward. `HOMEBREW_NO_AUTO_UPDATE` is still left exactly as
+it finds it, because that variable is yours.
 
 ---
 
@@ -196,17 +204,17 @@ brew uninstall --cask <cask>
 
 ### There is no way to turn the Homebrew part off
 
-This configuration requires Homebrew. Emptying both lists:
+This configuration installs and requires Homebrew. Emptying both lists:
 
 ```nix
   brews = [ ];
   casks = [ ];
 ```
 
-does not remove the step from the rebuild. It still runs, still needs a `brew`
-to talk to, and asks it to install nothing - so on a Mac without Homebrew the
-rebuild still stops with the message below. Nothing already installed is
-removed either; emptying the lists never uninstalls anything.
+does not remove the steps from the rebuild. They still run, still set the prefix
+up, and ask Homebrew to install nothing - so on a Mac whose prefix is missing the
+rebuild still stops with the message below. Nothing already installed is removed
+either; emptying the lists never uninstalls anything.
 
 ---
 
@@ -307,8 +315,14 @@ That restores your home directory. Two things it does not undo, both on purpose:
 - **the Homebrew formulae and casks stay installed.** This repo never uninstalls
   anything through Homebrew, and that does not change just because you are
   removing the repo. Use `brew uninstall` on whatever you no longer want;
-- **Nix itself stays installed.** Removing Nix is a separate, system-level
-  operation, and so is removing Homebrew.
+- **Nix itself stays installed, and so does Homebrew.** Removing Nix is a
+  separate, system-level operation. So is removing Homebrew - and note that the
+  prefix this repo created is a normal Homebrew prefix owned by you, except that
+  Homebrew's library directory - `/opt/homebrew/Library/Homebrew` on Apple
+  silicon, `/usr/local/Homebrew/Library/Homebrew` on Intel - is a symlink into
+  the Nix store rather than a checkout. Homebrew's own uninstall instructions
+  apply; that symlink and the `<prefix>/.managed_by_nix_darwin` marker are what
+  you would remove by hand.
 
 ---
 
@@ -324,10 +338,17 @@ nix build .#default       # does it still build?
 ./rebuild.sh              # apply it
 ```
 
-This pins only the Nix half. Homebrew's formulae and casks are not pinned by
-anything here: a rebuild installs whichever version Homebrew is offering at the
-time and then leaves it alone, so what you end up with depends on when you first
-installed it. Upgrading them is a separate, deliberate act:
+`nix flake update` moves Homebrew too: `brew-src` is an input like any other, so
+the command bumps it to the current commit of the tag in `flake.nix`. To move to
+a different Homebrew *version*, change that tag and rebuild - and expect to check
+the build, because `home.nix` patches Homebrew's source and those patches assert
+the lines they are replacing still exist. A Homebrew that renamed one fails
+`nix build .#default` rather than silently losing the patch.
+
+Your formulae and casks are not pinned by any of that: a rebuild installs
+whichever version Homebrew is offering at the time and then leaves it alone, so
+what you end up with depends on when you first installed it. Upgrading them is a
+separate, deliberate act:
 
 ```sh
 brew upgrade <formula>
@@ -372,30 +393,94 @@ If a new terminal still cannot find it, the Nix block is missing from
 `/etc/zshrc`; see [README.md](README.md#what-this-touches-and-what-it-does-not)
 for what to do about that on a Mac you do not administer.
 
-**`ERROR: no Homebrew at ...`** - `./bootstrap.sh` checks for Homebrew before it
-does anything, and did not find one. Nothing has been installed and you were not
-asked for a password, so there is nothing to undo. Install Homebrew from
-[brew.sh](https://brew.sh) and run `./bootstrap.sh` again. If Homebrew *is*
-installed, check `HOMEBREW_PREFIX`: the preflight trusts that variable when the
-environment sets it, and a stale value points it at the wrong place. It uses the
-same rule the rebuild does, so the two cannot disagree.
+**`ERROR: this Mac already has a Homebrew of its own.`** - the standard prefix
+contains a Homebrew this repo did not install, and it will not take it over. The
+message names the files it found. Nothing has been installed and you were not
+asked for a password, so there is nothing to undo. Either remove that Homebrew
+yourself - Homebrew documents how at
+[docs.brew.sh](https://docs.brew.sh/FAQ) - and run `./bootstrap.sh` again, or
+keep it and do not use this repo on this Mac. There is deliberately no third
+option.
 
-**`dotfiles-work: no Homebrew at ...`** - the same problem one script later. A
-rebuild got all the way to its last step and found no `brew` to talk to, which
-is what happens on a machine that had Homebrew when it was set up and does not
-now. Everything Nix installs is already in place; only the formulae and casks
-are missing. Install Homebrew from
-[brew.sh](https://brew.sh) and run `./rebuild.sh` again - this configuration
-requires it, and emptying the lists in `home.nix` is not a way around it. If
-Homebrew *is* installed, check `HOMEBREW_PREFIX`: the step trusts that variable
-when the environment sets it, and a stale value points it at the wrong place.
+**`dotfiles-work: <prefix> has not been set up yet`** - a rebuild reached the
+step that links Homebrew into the prefix and found no prefix. That step cannot
+create one; creating it needs a password and belongs to `./bootstrap.sh`. Run
+`./bootstrap.sh` on this Mac. Everything Nix installs is already in place by
+then; only the formulae and casks are missing.
 
-**A rebuild succeeds but `gh` or `herdr` is not found** - Homebrew installed
-them, but your shell cannot see Homebrew's `bin` directory. This repo finds
-`brew` by its prefix rather than through `PATH`, so the rebuild does not depend
-on the thing your shell is missing. Add Homebrew's own line to `~/.zprofile`,
-replacing `<prefix>` with `/opt/homebrew` on Apple silicon or `/usr/local` on
-Intel:
+**`<prefix> cannot be given to your account`** - the message lists the exact
+paths and marks each one either `(missing)` or not. Nothing has been changed
+either way. You will see it from `./bootstrap.sh` before anything is installed,
+or from a rebuild if the prefix stopped being usable after it was set up. The
+two kinds of path have different fixes, and one message can list both.
+
+A path with no marking is a directory something else created, and this repo will
+not take it over - a prefix set up for a different user reads this way too. To
+continue, give each such path to your own account and run `./bootstrap.sh`
+again:
+
+```sh
+sudo chown -R "$(whoami)" <path>
+```
+
+That is your decision to make and not this repo's, which is why it asks rather
+than doing it: on a Mac you share with software you did not install, a directory
+in `/usr/local` may belong to that software for a reason. If you would rather
+not, do not use this repo on this Mac.
+
+A path marked `(missing)` means the prefix still carries this repo's marker file
+but no longer holds what that marker promises. **Following Homebrew's own
+uninstall instructions on this Mac is how you get here** - they remove the
+prefix's directories, and the marker is not one of them. Delete the marker and
+run `./bootstrap.sh` again; it will ask for your password once and set the prefix
+up from scratch:
+
+```sh
+rm -f <prefix>/.managed_by_nix_darwin
+./bootstrap.sh
+```
+
+**`ERROR: this Mac already has a Homebrew of its own`, naming a path outside the
+prefix** - you have a Homebrew somewhere other than `/opt/homebrew` on Apple
+silicon or `/usr/local` on Intel. The usual cause is an Intel Homebrew still at
+`/usr/local` on a Mac that has since moved to Apple silicon. `./bootstrap.sh`
+stops before Nix is installed and before any password prompt, because setting up
+the standard prefix alongside it would leave you with two Homebrews and send the
+Brewfile to the wrong one. Uninstall the one you do not want -
+[docs.brew.sh](https://docs.brew.sh/FAQ) - remove its `brew shellenv` line from
+your shell profile, and run `./bootstrap.sh` again. Which one to keep is your
+call; this repo will not move or remove either.
+
+**`dotfiles-work: no Homebrew at ...`** - a rebuild got to the Brewfile step and
+found no `brew` to hand it to, which normally means the step before it did not
+run. Run `./bootstrap.sh`. If the prefix *is* set up, check `HOMEBREW_PREFIX`:
+this step trusts that variable when the environment sets it, and a stale value
+points it at the wrong place.
+
+**`dotfiles-work: refusing to hand the Brewfile to a Homebrew this
+configuration does not manage`** - a rebuild found a `brew`, but not the one in
+the prefix this repo set up, so it stopped without installing anything. The
+message names both: the `brew` it found and the prefix it manages.
+
+The usual cause is a `brew shellenv` line added to your shell profile **after**
+`./bootstrap.sh` ran, pointing `HOMEBREW_PREFIX` at a different Homebrew - that
+variable is what this step trusts. Either remove that line so the managed prefix
+is used again, or, if you would rather keep the other Homebrew, decide which one
+this Mac should have and re-run `./bootstrap.sh`, which names what it finds and
+stops.
+
+This is a refusal, not a warning: nothing is installed into a Homebrew this repo
+does not manage, and `--force` never replaces an app under someone else's
+prefix. `./bootstrap.sh` makes the same check before it asks for your password;
+this one runs on every rebuild, so adding a second Homebrew later cannot
+redirect your packages without telling you.
+
+**A rebuild succeeds but `gh`, `herdr` or `brew` is not found** - they are
+installed, but your shell cannot see Homebrew's `bin` directory. This repo finds
+`brew` by its prefix rather than through `PATH`, so a rebuild does not depend on
+the thing your shell is missing - and it does not write your `PATH` for Homebrew
+either. Add Homebrew's own line to `~/.zprofile`, replacing `<prefix>` with
+`/opt/homebrew` on Apple silicon or `/usr/local` on Intel:
 
 ```sh
 eval "$(<prefix>/bin/brew shellenv)"

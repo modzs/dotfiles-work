@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# Behaviour tests for the interactive steps in bootstrap.sh, which live in
-# lib/personalize.sh so they can be driven by a script instead of a person.
+# Behaviour tests for bootstrap.sh.
 #
-# The property under test is the one the repository this replaces got wrong:
+# Most of this is about the interactive steps, which live in lib/personalize.sh
+# so they can be driven by a script instead of a person; the rest is the refusal
+# in lib/nix-present.sh, which is in a library for the same reason. bootstrap.sh
+# itself is not run end to end by anything: running it installs Nix and asks for
+# a password twice. Its step ORDER is deliberately not asserted here either -
+# AGENTS.md says why, and why a grep over its source is not an acceptable
+# substitute.
+#
+# The property under test in the interactive checks is the one the repository
+# this replaces got wrong:
 #
 #   Wherever a default is offered, the default is THIS MACHINE'S CURRENT VALUE,
 #   never the value already written in the config.
@@ -24,13 +32,21 @@ set -u
 . "$ROOT/lib/flake-settings.sh"
 # shellcheck source=lib/personalize.sh
 . "$ROOT/lib/personalize.sh"
+# lib/nix-present.sh is deliberately NOT sourced here: its checks run it in a
+# fresh bash with a PATH of their own, which is the only way to ask what it does
+# on a machine that has no nix without taking this shell's tools away too.
 
 dotfiles_test_parse_args "$@"
 
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 10
+dotfiles_test_expect 12
+
+# A PATH with the ordinary system tools and deliberately no nix. The system
+# directories are the point: a Nix under /nix/var/nix, or one a CI runner put
+# on PATH, must not leak into the check that asserts what happens without one.
+SYSTEM_PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 write_fixture() {
   local path=$1 user=$2 home=$3
@@ -195,6 +211,54 @@ test_seeding_never_touches_an_existing_local_file() {
   pass "bootstrap: an existing local file is never overwritten"
 }
 
+# --- the refusal that has to happen before the password -----------------------
+#
+# bootstrap.sh asks lib/nix-present.sh for the path to `nix` immediately after
+# step 1, and the answer is what step 7 runs; that library says why it has to be
+# asked there and only there.
+#
+# What is covered here is the refusal itself, at the layer where that is honest.
+# The step ORDER is not asserted, for the reason at the top of this file.
+
+test_a_missing_nix_is_a_refusal_that_says_what_to_do() {
+  local output status=0
+
+  # A fresh bash under `env`, rather than a PATH assignment around a call in
+  # this shell: the stripped PATH must not outlive the check and leave the rest
+  # of this file running without the system tools.
+  # shellcheck disable=SC2016  # $1 is the inner shell's argument, not this one's
+  output=$(env PATH="$SYSTEM_PATH" /bin/bash -c \
+    '. "$1/lib/nix-present.sh"; dotfiles_nix_path' _ "$ROOT" 2>&1) || status=$?
+
+  assert_eq "$status" 1 \
+    "a missing nix should be a refusal, not a silently empty answer"
+  assert_contains "$output" "nix is not on this shell's PATH" \
+    "the refusal should name the problem"
+  assert_contains "$output" "Open a new terminal and re-run ./bootstrap.sh" \
+    "the refusal should say what to do about it"
+
+  pass "bootstrap: a missing nix is refused with both the cause and the fix"
+}
+
+test_an_installed_nix_is_handed_back_to_the_switch() {
+  local tmp found
+  # The other half: step 7 runs whatever this returns, so returning a usable
+  # path is as load-bearing as refusing. A stub, because the machine running
+  # the suite may or may not have a real nix and this must not depend on it.
+  tmp=$(dotfiles_test_tmproot dotfiles-nix)
+  printf '#!/bin/bash\nexit 0\n' >"$tmp/nix"
+  chmod +x "$tmp/nix"
+
+  # shellcheck disable=SC2016  # as above
+  found=$(env PATH="$tmp:$SYSTEM_PATH" /bin/bash -c \
+    '. "$1/lib/nix-present.sh"; dotfiles_nix_path' _ "$ROOT")
+
+  assert_eq "$found" "$tmp/nix" \
+    "the path handed to the switch is not the nix that is actually on PATH"
+
+  pass "bootstrap: an installed nix comes back as the path the switch runs"
+}
+
 # --- what bootstrap.sh itself promises ----------------------------------------
 
 test_bootstrap_never_prompts_for_a_machine_name() {
@@ -239,6 +303,9 @@ test_an_ordinary_home_directory_is_written_back_as_null
 test_a_matching_home_directory_asks_nothing
 test_seeding_creates_the_local_file
 test_seeding_never_touches_an_existing_local_file
+test_a_missing_nix_is_a_refusal_that_says_what_to_do
+test_an_installed_nix_is_handed_back_to_the_switch
 test_bootstrap_never_prompts_for_a_machine_name
+
 
 test_summary

@@ -2,21 +2,31 @@
 # Bootstrap from nothing to a configured home directory on macOS.
 # Run this once. After it finishes, use ./rebuild.sh for every later change.
 #
-# The only thing here that needs sudo is the Nix installer in step 1, and that
-# is the only time this repo asks for a password. No machine name, no /etc, no
-# macOS system settings, and no package manager installed on your behalf.
+# This asks for your password TWICE, both times here and never again: once for
+# the Nix installer in step 1, and once in step 5 to create Homebrew's prefix
+# and hand it to you. ./rebuild.sh asks for neither. No machine name, no /etc,
+# no macOS system settings, and no other user's account touched.
 #
-# One part of the switch in step 6 does reach outside your home directory: it
-# hands a generated Brewfile to a Homebrew you installed yourself, and Homebrew
-# installs into its own prefix. It uninstalls nothing, and it neither installs
-# nor updates Homebrew itself. The one thing it will replace is an application
-# already sitting where a cask on its list wants to be - that list is in
-# home.nix and it is short. If that app belongs to someone else, replacing it is
-# where Homebrew can ask for a password of its own; README.md is exact about
-# that case and about all of this.
+# Two parts of this reach outside your home directory, and both are deliberate.
 #
-# Homebrew has to be installed before this runs. The preflight below checks for
-# it before step 1, so a Mac without it is turned away before anything has been
+# Step 5 creates Homebrew's standard prefix - /opt/homebrew on Apple silicon,
+# /usr/local on Intel - and gives it to your account. That is the one privileged
+# thing this repository does itself, it happens once, and it refuses outright if
+# a Homebrew it did not install is already sitting there: nothing here converts,
+# migrates or deletes one. Afterwards Homebrew's code is a symlink into the Nix
+# store at the version flake.lock pins, so there is no self-updating checkout in
+# your prefix.
+#
+# The switch in step 7 then hands that Homebrew a generated Brewfile, and
+# Homebrew installs what it lists into its prefix and /Applications. It
+# uninstalls nothing. The one thing it will replace is an application already
+# sitting where a cask on its list wants to be - that list is in home.nix and it
+# is short. If that app belongs to someone else, replacing it is where Homebrew
+# can ask for a password of its own; README.md is exact about that case and
+# about all of this.
+#
+# The preflight below looks at the prefix before step 1, so a Mac this
+# repository may not set Homebrew up on is turned away before anything has been
 # installed and before any password is asked for.
 set -euo pipefail
 
@@ -34,6 +44,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/install-report.sh"
 # shellcheck source=lib/homebrew-present.sh
 . "$DIR/lib/homebrew-present.sh"
+# shellcheck source=lib/nix-present.sh
+. "$DIR/lib/nix-present.sh"
 
 # Every step below resolves through ~/.dotfiles, so settle that path before
 # anything is installed and before sudo is asked for. Refusing here costs the
@@ -49,21 +61,32 @@ else
   echo "    ok"
 fi
 
-# The other hard prerequisite, and it is checked here for the same reason: this
-# configuration requires Homebrew, but the step that needs it is the last thing
-# a switch does. Finding out then would cost the user a Nix install and a
-# password before the bad news. This asks a path question only; it never runs
-# Homebrew.
-echo "==> Preflight: Homebrew"
+# The other hard prerequisite, and it is checked here for the same reason. This
+# configuration installs its own Homebrew, so an absent one is fine - but a
+# prefix that already holds somebody else's is not, and that is a refusal worth
+# making before a Nix install and a password rather than three steps later.
+# This asks path questions only; it never runs Homebrew.
+#
+# Resolved once, here, and handed to both the preflight and step 5. The prefix
+# is decided by the architecture and by nothing else - see the comment in
+# lib/homebrew-present.sh - and deciding it twice in one script is how the two
+# would come to disagree.
+HOMEBREW_PREFIX_PATH="$(dotfiles_homebrew_prefix)"
+HOMEBREW_LIBRARY_PATH="$(dotfiles_homebrew_library)"
+echo "==> Preflight: Homebrew's prefix"
 # Not captured: it reports what it found itself, so no path to `brew` is ever
 # held here. See the comment on the function.
-dotfiles_homebrew_require
+dotfiles_homebrew_preflight "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
 
 echo "==> Step 1: Determinate Nix"
-echo "    This is the one and only step that asks for your password."
 if command -v nix >/dev/null 2>&1; then
   echo "    nix already installed, skipping"
 else
+  # Announced inside the branch that actually asks. Said before the check, a
+  # re-run on a bootstrapped Mac promised two password prompts and then asked
+  # for none - step 5 skips itself the same way - and a script that overstates
+  # what it is about to do is one a user stops believing about the rest.
+  echo "    This asks for your password. Step 5 asks once more, and that is all."
   curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix \
     | sh -s -- install --no-confirm
   # shellcheck disable=SC1091
@@ -73,6 +96,13 @@ else
     set -u
   fi
 fi
+
+# The other thing step 1 has to have produced, and the last refusal this run can
+# make. It is asked HERE - before step 2 repoints ~/.dotfiles and, far more
+# importantly, before step 5 spends the password - because a Mac whose switch
+# cannot run has to be turned away before either. Step 7 uses $NIX_BIN and tests
+# nothing again; lib/nix-present.sh says why there is exactly one of these.
+NIX_BIN="$(dotfiles_nix_path)"
 
 echo "==> Step 2: symlink this repo to ~/.dotfiles"
 dotfiles_link_apply "$DIR"
@@ -91,7 +121,66 @@ personalize_home_directory "$DIR/flake.nix"
 # instance because a prompt was answered with someone else's value.
 flake_settings_check_machine "$DIR/flake.nix"
 
-echo "==> Step 5: the untracked local files"
+echo "==> Step 5: Homebrew's prefix"
+# The one privileged thing this repository does, and the last check has just
+# passed - so by here everything that can refuse this run already has. Creating
+# the prefix before knowing the account and the home directory were right would
+# mean writing outside $HOME for a run that then stops.
+#
+# This is the ONLY sudo in this repository. It runs a tracked script, with
+# arguments named here, and that script escalates nothing itself: it expects to
+# be root already. tests/safety.test.sh permits exactly this one call and fails
+# on a second anywhere.
+#
+# Skipped entirely when the prefix is already set up. Together with step 1
+# skipping an existing Nix, that is what makes a re-run of ./bootstrap.sh ask
+# for no password at all.
+case "$(dotfiles_homebrew_prefix_state "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH")" in
+  managed)
+    echo "    $HOMEBREW_PREFIX_PATH is already set up; no password needed"
+    ;;
+  occupied)
+    # The preflight said this too, before Nix was installed. Saying it again is
+    # not redundancy for its own sake: the preflight ran several steps ago, and
+    # this is the line immediately before the one that would write.
+    echo "ERROR: refusing to set up $HOMEBREW_PREFIX_PATH." >&2
+    dotfiles_homebrew_report_occupied "       " \
+      "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
+    exit 1
+    ;;
+  unusable)
+    # The other refusal, and it stops the run here rather than spending a
+    # password on a prefix that cannot be given to this account. The preflight
+    # said this too; this is the line immediately before the one that would ask.
+    echo "ERROR: refusing to set up $HOMEBREW_PREFIX_PATH." >&2
+    dotfiles_homebrew_report_unusable "       " \
+      "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH"
+    exit 1
+    ;;
+  *)
+    echo "    About to create $HOMEBREW_PREFIX_PATH and give it to $(whoami)."
+    echo "    That needs your password once. Nothing is removed, and no"
+    echo "    existing Homebrew is touched - there is none here to touch."
+    echo "    Homebrew's own code will be a symlink into the Nix store."
+    # Guarded rather than left to `set -e`, because the most likely failure
+    # here is a cancelled or mistyped password, and the bare message sudo
+    # prints for that says nothing about what state the machine is in. Nothing
+    # outside $HOME has been touched at this point, and saying so is the
+    # difference between a stopped run and an alarming one.
+    if ! sudo "$DIR/lib/homebrew-initialize-prefix.sh" \
+      "$HOMEBREW_PREFIX_PATH" "$HOMEBREW_LIBRARY_PATH" "$(whoami)" admin; then
+      echo "ERROR: Homebrew's prefix was not created, so this run stops here." >&2
+      echo "       Nothing outside your home directory has been changed." >&2
+      echo "       If you cancelled or mistyped the password, run" >&2
+      echo "       ./bootstrap.sh again - it picks up where it left off." >&2
+      echo "       If you do not have admin rights on this Mac, this" >&2
+      echo "       repository cannot be used on it; README.md says why." >&2
+      exit 1
+    fi
+    ;;
+esac
+
+echo "==> Step 6: the untracked local files"
 # These two are the seam. Everything specific to one machine or one employer
 # lives in them, they are never committed, and this repo never reads their
 # contents - it only arranges for them to be included. Seeding them with
@@ -132,10 +221,11 @@ seed_local_file "$HOME/.gitconfig.local" "~/.gitconfig.local" <<'LOCAL'
 # instead - see README.md.
 LOCAL
 
-echo "==> Step 6: first build and switch"
-# No sudo. Home Manager writes into $HOME, and its last activation step asks an
-# already-installed Homebrew for the formulae and casks home.nix lists. Neither
-# needs a privilege this script has not already got.
+echo "==> Step 7: first build and switch"
+# No password. Home Manager writes into $HOME, points the prefix step 5 created
+# at the Homebrew in the Nix store, and asks that Homebrew for the formulae and
+# casks home.nix lists. All of it happens as you, in directories you now own,
+# which is why ./rebuild.sh never needs a password either.
 #
 # `nix run ~/.dotfiles#home-manager` runs the Home Manager revision this repo's
 # flake.lock pins, so the tool and the configuration it activates can never be
@@ -150,19 +240,13 @@ CONFIG_NAME="$(flake_settings_config_name "$DIR/flake.nix")"
 # configured, and this is the only place the user gets to see which of the two
 # configurations is about to be built.
 echo "    This Mac is $(uname -m), so the configuration is \"$CONFIG_NAME\"."
-NIX_BIN="$(command -v nix || true)"
-if [ -z "$NIX_BIN" ]; then
-  echo "    nix is not on this shell's PATH, so the switch cannot run."
-  echo "    The Determinate installer only adds nix to the PATH of new shells,"
-  echo "    so a terminal opened before step 1 installed it will not have it."
-  echo "    Open a new terminal and re-run ./bootstrap.sh."
-  exit 1
-fi
+# $NIX_BIN was resolved and verified right after step 1, which is what lets this
+# run without a second guard: a refusal here would come after the password.
 "$NIX_BIN" run "$HOME/.dotfiles#home-manager" -- \
   switch -b backup --flake "$HOME/.dotfiles#$CONFIG_NAME"
 
 # Only now is this worth asking: the switch is what installs the git includes,
-# so before it git could not have read the file step 5 just seeded. It stays
+# so before it git could not have read the file step 6 just seeded. It stays
 # silent unless git would have to invent an identity.
 git_identity_report "    "
 

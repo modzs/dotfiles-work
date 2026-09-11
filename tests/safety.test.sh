@@ -7,24 +7,43 @@
 # that literally.
 #
 # That is no longer the whole truth, and this file says so out loud rather than
-# quietly enforcing less. On the user's instruction this configuration now
-# drives Homebrew: it generates a Brewfile and asks an existing Homebrew to
-# install what it lists, which writes into /opt/homebrew and puts casks in
-# /Applications. So the rule has narrowed, deliberately and in exactly one
-# place - see AGENTS.md and README.md, which state the narrowed version in the
-# same words - and the checks below have narrowed with it:
+# quietly enforcing less. The rule has narrowed twice now, both times on the
+# owner's instruction, and the checks below have narrowed with it - each time by
+# splitting one absolute assertion into the narrower ones that are still true,
+# never by deleting it.
 #
-# - test_nothing_here_installs_homebrew and
-#   test_the_only_homebrew_paths_are_the_two_prefixes replace a single check
-#   that asserted the built artifact contained no Homebrew path at all. What
-#   still holds is that this repo never installs, updates or removes Homebrew
-#   itself, and that the only Homebrew paths it embeds are the two it needs to
-#   find an existing `brew`. What it does with that `brew` - install, never
-#   uninstall - is exercised by running it, in tests/homebrew.test.sh.
+# First, this configuration started driving Homebrew: it generates a Brewfile
+# and asks Homebrew to install what it lists, which writes into the Homebrew
+# prefix and puts casks in /Applications.
+#
+# Then it started installing Homebrew. Homebrew's source is a pinned flake
+# input, home.nix patches the store copy and generates a `brew` around it,
+# bootstrap.sh creates the standard prefix behind one announced `sudo`, and the
+# switch links the two together. So:
+#
+# - test_flake_pulls_in_no_system_configuration_tool now permits exactly one
+#   more input, by identity rather than by name: `brew-src` has to resolve to
+#   Homebrew/brew and be a non-flake source. nix-darwin, darwin and nix-homebrew
+#   stay banned outright, which is the assertion that matters - the whole design
+#   is a port of nix-homebrew's technique WITHOUT nix-homebrew's module;
+# - test_no_tracked_script_escalates_privileges now permits exactly one `sudo`,
+#   in bootstrap.sh, invoking exactly one script. Everything else, everywhere
+#   else, still fails - and test_the_privilege_scan_still_catches_an_escalation
+#   runs the scanner against fixtures so the narrowing cannot quietly become a
+#   hole;
+# - test_nothing_here_installs_homebrew keeps its full strength. Getting
+#   Homebrew from a pinned flake input is the entire point, so a script that
+#   fetched or cloned or installed it at run time is exactly as wrong as it ever
+#   was;
+# - test_the_only_homebrew_paths_are_the_two_prefixes has grown from two paths
+#   to six, and now asserts the exact set rather than a rule of thumb about how
+#   many there should be.
 #
 # Nothing else changed. Every other check below is the original one: no
-# nix-darwin, no system-level options, no managed file outside $HOME, no
-# privilege escalation anywhere in this repo's own scripts.
+# nix-darwin, no system-level options, no managed file outside $HOME. In
+# particular the system-level option check is untouched and must stay passing:
+# if it ever fails, a nix-darwin module has been mixed in and the design is
+# wrong.
 #
 # Each check asserts against the artifact that really decides it, not against
 # the prose in README.md:
@@ -52,7 +71,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 8
+dotfiles_test_expect 9
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -71,11 +90,30 @@ test_flake_pulls_in_no_system_configuration_tool() {
   # flake.lock is parsed as JSON rather than scanned as text, and every node in
   # the graph is inspected - not just the root's direct inputs. An input that
   # arrived through some other flake is exactly the case a text search misses.
+  #
+  # The banned list keeps the three names that matter and has dropped the two it
+  # can no longer carry. `brew` and `homebrew` were on it because this repo used
+  # to have no business fetching Homebrew at all; it now installs Homebrew from
+  # a pinned source, so an input matching those names is the design working. The
+  # replacement is not a looser name check but a stricter identity one: there is
+  # exactly one such input, it is named brew-src, it must resolve to
+  # Homebrew/brew, and it must be `flake = false` - a plain source tree, not a
+  # flake whose own inputs could pull anything else in behind it.
+  #
+  # nix-darwin, darwin and nix-homebrew stay banned, and that is the load-bearing
+  # half. nix-homebrew's technique is ported into home.nix by hand precisely
+  # because its only output is a nix-darwin module, and importing it would drag
+  # in the tool this repository exists not to use.
   report=$(python3 - "$ROOT/flake.lock" <<'PY'
 import json, sys
 
-BANNED = ("nix-darwin", "darwin", "nix-homebrew", "brew", "homebrew")
-EXPECTED_ROOT_INPUTS = {"home-manager", "nixpkgs"}
+BANNED = ("nix-darwin", "darwin", "nix-homebrew")
+EXPECTED_ROOT_INPUTS = {"home-manager", "nixpkgs", "brew-src"}
+
+# The one input allowed to be about Homebrew, and exactly what it has to be.
+BREW_INPUT = "brew-src"
+BREW_OWNER = "homebrew"
+BREW_REPO = "brew"
 
 with open(sys.argv[1]) as fh:
     lock = json.load(fh)
@@ -103,6 +141,23 @@ for name, node in nodes.items():
         str(original.get("owner", "")),
         str(original.get("url", "")),
     ]
+    if name == BREW_INPUT:
+        # Checked by what it IS, not by what it is called. A node named
+        # brew-src that resolved somewhere else would be the whole guard
+        # defeated by a rename.
+        if locked.get("owner", "").lower() != BREW_OWNER \
+                or locked.get("repo", "").lower() != BREW_REPO:
+            problems.append(
+                "input %r resolves to %r, not to Homebrew/brew"
+                % (name, " ".join(f for f in fields if f))
+            )
+        if node.get("flake") is not False:
+            problems.append(
+                "input %r is a flake; it must be `flake = false` so that nothing"
+                " can arrive through its own inputs" % (name,)
+            )
+        continue
+
     haystack = " ".join(fields).lower()
     for banned in BANNED:
         if banned in haystack:
@@ -118,7 +173,7 @@ PY
 
   [ -z "$report" ] || fail "flake.lock pulls in a system-configuration tool: $report"
 
-  pass "flake: the locked input graph is nixpkgs and home-manager, and nothing else"
+  pass "flake: the locked inputs are nixpkgs, home-manager and Homebrew's own source, and nothing else"
 }
 
 # --- the configuration cannot express system settings -------------------------
@@ -208,29 +263,40 @@ test_home_directory_matches_the_declared_one() {
 
 # --- no script in this repo can ask for elevated privileges -------------------
 
-test_no_tracked_script_escalates_privileges() {
-  local script report status=0
-  if ! command -v python3 >/dev/null 2>&1; then
-    skip "privilege escalation check (python3 not found)"
-    return 0
-  fi
-
-  # A real shell tokenizer, so a word inside a comment is not mistaken for a
-  # command and a command is not missed because of the spacing around it. The
-  # rebuild path must never prompt for a password: the whole promise of this
-  # repo is that it is usable on a machine the user does not administer.
-  #
-  # The tokenizer goes into a temp file rather than onto python's stdin,
-  # because stdin is already spoken for - it is where xargs reads the file list.
+# Write the privilege-escalation scanner to a temp file and print its path.
+# Split out from its caller so the checker itself can be run against fixture
+# scripts whose answer is known - the same reason the Homebrew scanner below is
+# split out, and a more pressing one now that this check has an exception in it.
+dotfiles_write_privscan() {
+  local script
   script=$(mktemp "${TMPDIR:-/tmp}/dotfiles-tokenize.XXXXXX") \
     || fail "could not create a temp file for the tokenizer"
-  cat >"$script" <<'PY'
-import shlex, sys
+  cat >"$script" <<'SCAN'
+import os, shlex, sys
 
 # Every macOS way of running something as another user, plus the AppleScript
 # spelling that raises an authorization dialog.
 BANNED = {"sudo", "doas", "su", "sudoedit", "pkexec"}
 APPLESCRIPT = "with administrator privileges"
+
+# THE ONE EXCEPTION, and it is written as narrowly as it can be written.
+#
+# This configuration installs Homebrew, which means creating a prefix outside
+# the home directory and giving it to the user. That needs root exactly once,
+# and it happens in bootstrap.sh. Everything after it - every rebuild, every
+# `brew install` the Brewfile asks for - runs as the user in a prefix the user
+# now owns, which is what lets rebuild.sh still promise it never asks for a
+# password.
+#
+# So the exception is not "bootstrap.sh may use sudo". It is: bootstrap.sh may
+# contain exactly ONE privilege token, it must be `sudo`, and the word after it
+# must be this one script. A second sudo, a sudo running anything else, a sudo
+# with an option in front of the path, or the same call in any other file, all
+# still fail. test_the_privilege_scan_still_catches_an_escalation runs this
+# against fixtures for every one of those.
+ALLOWED_FILE = "bootstrap.sh"
+ALLOWED_TOKEN = "sudo"
+ALLOWED_TARGET = "$DIR/lib/homebrew-initialize-prefix.sh"
 
 problems = []
 for path in sys.argv[1:]:
@@ -243,14 +309,47 @@ for path in sys.argv[1:]:
     except ValueError as error:
         problems.append("%s: could not be tokenized (%s)" % (path, error))
         continue
-    for token in tokens:
-        if token in BANNED:
-            problems.append("%s: runs %r" % (path, token))
+
+    exception_available = os.path.basename(path) == ALLOWED_FILE
+    for index, token in enumerate(tokens):
+        if token not in BANNED:
+            continue
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if (exception_available
+                and token == ALLOWED_TOKEN
+                and following == ALLOWED_TARGET):
+            # Used up. A second one in the same file is a problem again, which
+            # is how "exactly one" is enforced rather than "at least one".
+            exception_available = False
+            continue
+        problems.append("%s: runs %r" % (path, token))
+
     if APPLESCRIPT in source.lower():
         problems.append("%s: contains %r" % (path, APPLESCRIPT))
 
 print("\n".join(problems))
-PY
+SCAN
+
+  printf '%s\n' "$script"
+}
+
+test_no_tracked_script_escalates_privileges() {
+  local script report status=0
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "privilege escalation check (python3 not found)"
+    return 0
+  fi
+
+  # A real shell tokenizer, so a word inside a comment is not mistaken for a
+  # command and a command is not missed because of the spacing around it. The
+  # rebuild path must never prompt for a password: the whole promise of this
+  # repo is that it is usable on a machine the user does not administer, and
+  # the one exception the scanner carries is confined to bootstrap.sh.
+  #
+  # The tokenizer goes into a temp file rather than onto python's stdin,
+  # because stdin is already spoken for - it is where xargs reads the file list.
+  script=$(dotfiles_write_privscan) \
+    || fail "could not write the privilege-escalation scanner"
 
   # This file excludes itself: it has to spell out the words it forbids in
   # order to look for them.
@@ -262,7 +361,78 @@ PY
   [ -z "$report" ] \
     || fail "a tracked script escalates privileges: $report"
 
-  pass "scripts: no tracked shell script runs sudo or any other privilege escalation"
+  pass "scripts: the only privilege escalation is bootstrap.sh's single announced sudo"
+}
+
+test_the_privilege_scan_still_catches_an_escalation() {
+  local script root case_name body verdict report status=0
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "privilege scanner behaviour check (python3 not found)"
+    return 0
+  fi
+
+  # The check above passes by finding nothing, which is also what a scanner
+  # that cannot see anything does - and it now carries an exception, which is
+  # exactly the shape of thing that quietly widens. So it is run here against a
+  # matrix of one-line scripts whose verdict is known in advance.
+  #
+  # The file NAME decides whether the exception is even available, so each
+  # fixture is written under the name it has to be judged as. The rows that
+  # matter most are the near misses: the same sudo in another file, a second one
+  # in bootstrap.sh, and a sudo whose next word is anything else.
+  script=$(dotfiles_write_privscan) \
+    || fail "could not write the privilege-escalation scanner"
+  root=$(dotfiles_test_tmproot dotfiles-privscan-fixtures)
+
+  # <verdict> <filename> <shell line>. The line is the remainder of the record.
+  while read -r verdict case_name body; do
+    [ -n "$case_name" ] || continue
+    mkdir -p "$root/$case_name"
+    printf '#!/usr/bin/env bash\n%s\n' "$body" >"$root/$case_name/$case_name.sh"
+
+    report=$(python3 "$script" "$root/$case_name/$case_name.sh") || status=$?
+    [ "$status" = 0 ] || fail "the scanner could not tokenize the $case_name fixture"
+
+    case $verdict in
+      flag)
+        [ -n "$report" ] \
+          || fail "the privilege scanner passed \"$body\" in $case_name.sh, which escalates" ;;
+      pass)
+        [ -z "$report" ] \
+          || fail "the privilege scanner flagged \"$body\" in $case_name.sh: $report" ;;
+      *) fail "the $case_name fixture declares an unknown verdict: $verdict" ;;
+    esac
+  done <<'MATRIX'
+flag rebuild sudo "$DIR/lib/homebrew-initialize-prefix.sh" a b c d
+flag someotherfile sudo "$DIR/lib/homebrew-initialize-prefix.sh" a b c d
+flag plainsudo sudo chown -R me /opt/homebrew
+flag doas doas chown -R me /opt/homebrew
+flag applescript osascript -e 'do shell script "x" with administrator privileges'
+flag sudoflag sudo -n "$DIR/lib/homebrew-initialize-prefix.sh" a b c d
+flag sudoother sudo "$DIR/lib/something-else.sh" a b c d
+pass bootstrap sudo "$DIR/lib/homebrew-initialize-prefix.sh" a b c d
+pass comment # explaining that sudo is what the Nix installer needs
+MATRIX
+
+  # "Exactly one", which a single-line fixture cannot express: the second call
+  # in the same bootstrap.sh has to be flagged even though the first is allowed.
+  mkdir -p "$root/twice"
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # $DIR is fixture text, not an expansion
+    printf 'sudo "$DIR/lib/homebrew-initialize-prefix.sh" a b c d\n'
+    # shellcheck disable=SC2016  # as above
+    printf 'sudo "$DIR/lib/homebrew-initialize-prefix.sh" e f g h\n'
+  } >"$root/twice/bootstrap.sh"
+  report=$(python3 "$script" "$root/twice/bootstrap.sh") || status=$?
+  [ "$status" = 0 ] || fail "the scanner could not tokenize the twice fixture"
+  [ -n "$report" ] \
+    || fail "the privilege scanner allowed a SECOND sudo in bootstrap.sh, so the exception is not 'exactly one'"
+
+  rm -f "$script"
+
+  pass "scripts: the privilege scan flags every escalation and allows only bootstrap.sh's one call"
 }
 
 # Write the Homebrew-invocation scanner to a temp file and print its path.
@@ -478,6 +648,10 @@ test_the_homebrew_scan_tells_an_invocation_from_a_path_test() {
   # brew ...`, `exec brew ...` or `command brew ...`. Every row below is a
   # spelling that was once wrong or is a case the rule deliberately permits, so
   # a third narrowing has to break a named row rather than slip through a gap.
+  #
+  # `subshell` and `arraysubst` are the two rows that pin the direction: a
+  # parenthesised group and a command substitution are both places a `brew` can
+  # hide, and both must stay flagged.
   script=$(dotfiles_write_brewscan) \
     || fail "could not write the Homebrew-invocation scanner"
   root=$(dotfiles_test_tmproot dotfiles-brewscan-fixtures)
@@ -514,6 +688,8 @@ flag casearm case x in y) brew install z ;; esac
 flag pipeline true | brew install nix
 flag substitution prefix=$(brew --prefix)
 flag backtick prefix=`brew --prefix`
+flag subshell ( brew install nix )
+flag arraysubst dirs=( $(brew --prefix) )
 pass pathtest [ -x /opt/homebrew/bin/brew ] && echo found
 pass wordlist for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$c" ]; done
 pass quotedlist searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
@@ -524,30 +700,41 @@ MATRIX
   pass "scripts: the Homebrew scan flags every spelling of an invocation and allows a path test"
 }
 
-# --- the only Homebrew the artifact knows about is an existing one ------------
+# --- the Homebrew paths the artifact embeds are exactly the ones it needs -----
 
 test_the_only_homebrew_paths_are_the_two_prefixes() {
-  local generation script hit hits unexpected=""
+  local generation bundle setup extra hit hits missing unexpected=""
+  local prefix library allowed
   if ! command -v nix >/dev/null 2>&1; then
     skip "Homebrew path check (nix not found)"
     return 0
   fi
 
-  # The narrowed rule, second half, and the check this file used to make in its
-  # absolute form: the built activation package contained no Homebrew path at
-  # all. It now contains two, because finding an existing `brew` is the whole
-  # mechanism - Home Manager replaces PATH with Nix store paths before running
-  # an activation script, so an absolute probe is the only way left.
+  # This check began as "the built activation package contains no Homebrew path
+  # at all". It then allowed two, the prefixes an existing `brew` could be
+  # found at. It now allows six, because this configuration installs Homebrew:
+  # it creates the prefix, synthesizes the library inside it, builds a fake
+  # repository there and links a generated launcher into its bin. Each of those
+  # is a path, and each has to be written down somewhere.
   #
-  # Two, and no more. A third would mean something here had started reaching
-  # into Homebrew's own tree - its Cellar, its Library, its repository - rather
-  # than just asking its `brew` to install a Brewfile.
+  # So the shape of the assertion has changed with it, and this is the important
+  # part: it is no longer "not more than N". It is the EXACT SET. A seventh path
+  # is a failure, and so is a sixth that is not one of these - the difference
+  # between a check that notices a new reach into Homebrew's tree and one that
+  # merely counts.
   #
-  # This checks the built artifact, not the source: a path in a comment is not
-  # a path the machine follows. Three things are in scope - the activate script,
-  # the generated home-files tree, and the Homebrew step, which is its own store
-  # path referenced from the activate script rather than a file inside the
-  # generation.
+  # Both architectures produce the same set, and that is not a coincidence worth
+  # hiding: lib/homebrew-present.sh carries the arm and the Intel answer in one
+  # `case`, so whichever machine builds it, the library names both.
+  #
+  # This checks the built artifact, not the source: a path in a comment is not a
+  # path the machine follows. Five things are in scope - the activate script,
+  # the generated home-files tree, the Homebrew bundle step, the prefix-setup
+  # step, and the two files that step names (the library it sources and the
+  # `brew` it links). The last three are new, and leaving them out is exactly
+  # how this check would have gone quiet: the setup step is where every new path
+  # lives, and scanning only what was in scope before would have reported "ok"
+  # for a scope that no longer contained the interesting file.
   #
   # Enumerated with `find -L` rather than left to `grep -r`, and that is a bug
   # fix, not a style choice. In a built generation `home-files`, `home-path` and
@@ -559,33 +746,80 @@ test_the_only_homebrew_paths_are_the_two_prefixes() {
   # exactly where a regression would land: a future `home.file` whose text
   # embeds a Cellar path or a `brew shellenv` line lands there.
   #
-  # home-path is deliberately NOT in scope. It is the nixpkgs package closure,
-  # not this repository's output. A Homebrew path inside some upstream package
-  # is a fact about that package and not evidence that this configuration
-  # reaches into Homebrew, so scanning it would produce hits nobody here can act
-  # on - the fastest way to teach someone to ignore this check.
+  # Two things are deliberately NOT in scope. home-path is the nixpkgs package
+  # closure, not this repository's output: a Homebrew path inside some upstream
+  # package is a fact about that package, and scanning it would produce hits
+  # nobody here can act on - the fastest way to teach someone to ignore this
+  # check. The patched Homebrew tree is out for the stronger version of the same
+  # reason: it IS Homebrew, every path in it is Homebrew's own, and asserting
+  # anything about them would be asserting something about upstream.
   generation=$(dotfiles_generation "$SYSTEM") \
     || fail "could not build the activation package"
-  script=$(dotfiles_brew_bundle_script "$generation") \
+  bundle=$(dotfiles_brew_bundle_script "$generation") \
     || fail "the activation script does not run a Homebrew step at all"
+  setup=$(dotfiles_homebrew_prefix_script "$generation") \
+    || fail "the activation script does not run a Homebrew prefix-setup step at all"
+  extra=$(dotfiles_homebrew_prefix_script_files "$setup") \
+    || fail "the prefix-setup step names neither a library to source nor a brew to link"
 
   # What stops the scope from narrowing again in silence. The generated Brewfile
   # lives under home-files and this suite knows it is there, so a traversal that
   # cannot reach it is not reading what this check claims to read - and a check
   # that can go quiet is the failure being fixed here, not a smaller version of
   # it.
-  find -L "$generation/activate" "$generation/home-files" "$script" -type f -print 2>/dev/null \
+  # shellcheck disable=SC2086  # the two extra paths are store paths, never spaced
+  find -L "$generation/activate" "$generation/home-files" "$bundle" "$setup" $extra \
+    -type f -print 2>/dev/null \
     | grep -q -F "/home-files/.config/dotfiles/Brewfile" \
     || fail "the artifact scan never reached the generated Brewfile, so it is reading less than it claims"
 
-  hits=$(find -L "$generation/activate" "$generation/home-files" "$script" -type f -print0 2>/dev/null \
-    | xargs -0 grep -o -h -E '/opt/homebrew[A-Za-z0-9_./-]*|/usr/local/(Homebrew|Cellar|Caskroom)[A-Za-z0-9_./-]*|/usr/local/bin/brew' \
-    2>/dev/null | sort -u || true)
+  # A trailing full stop or slash is stripped before the set is compared. Two of
+  # the five files in scope are shell scripts with comments in them, and a
+  # sentence that ends "...at /opt/homebrew." otherwise yields a path with the
+  # sentence's punctuation stuck to it. No real path ends in either character,
+  # so this cannot hide one.
+  #
+  # Prose paths do count, and that is the deliberate choice rather than an
+  # oversight: keeping them in means a comment cannot mention a corner of
+  # Homebrew's tree that the code has no business touching without someone
+  # having to widen this list on purpose.
+  # shellcheck disable=SC2086  # as above
+  hits=$(find -L "$generation/activate" "$generation/home-files" "$bundle" "$setup" $extra \
+    -type f -print0 2>/dev/null \
+    | xargs -0 grep -o -h -E '/opt/homebrew[A-Za-z0-9_./-]*|/usr/local[A-Za-z0-9_./-]*' \
+    2>/dev/null | sed -e 's#[./]*$##' | sort -u || true)
+
+  # The complete set, and why each one is here:
+  #
+  #   /opt/homebrew                  the prefix on Apple silicon
+  #   /opt/homebrew/Library          its library, which holds the code symlink
+  #   /opt/homebrew/bin/brew         the launcher, and the first place the
+  #                                  bundle step looks
+  #   /usr/local                     the prefix on Intel
+  #   /usr/local/Homebrew/Library    its library - one level down, because
+  #                                  /usr/local belongs to the whole machine
+  #   /usr/local/bin/brew            the Intel launcher, and the bundle step's
+  #                                  second candidate
+  #
+  # Nothing names the marker file or the fake repository, and that is worth
+  # knowing rather than being a gap: the library builds both from the prefix it
+  # was given, so neither is a literal anywhere.
+  allowed="/opt/homebrew
+/opt/homebrew/Library
+/opt/homebrew/bin/brew
+/usr/local
+/usr/local/Homebrew/Library
+/usr/local/bin/brew"
 
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
-    case "$hit" in
-      /opt/homebrew/bin/brew|/usr/local/bin/brew) : ;;
+    case "
+$allowed" in
+      *"
+$hit") : ;;
+      *"
+$hit
+"*) : ;;
       *) unexpected="$unexpected $hit" ;;
     esac
   done <<EOF
@@ -593,18 +827,44 @@ $hits
 EOF
 
   [ -z "$unexpected" ] \
-    || fail "the activation package reaches into Homebrew's own tree, not just its brew:$unexpected"
+    || fail "the activation package reaches into Homebrew's own tree, not just the paths it manages:$unexpected"
 
-  # Both of them, and not merely "nothing unexpected". An empty result would
-  # pass the check above while meaning the artifact had stopped looking for
-  # Homebrew at all - which is how a check that guards a narrowing quietly
+  # Every one of them, and not merely "nothing unexpected". An empty result
+  # would pass the check above while meaning the artifact had stopped setting
+  # Homebrew up at all - which is how a check that guards a narrowing quietly
   # becomes a check that guards nothing.
-  assert_contains "$hits" "/opt/homebrew/bin/brew" \
-    "the activation package does not look for Homebrew on Apple silicon"
-  assert_contains "$hits" "/usr/local/bin/brew" \
-    "the activation package does not look for Homebrew on Intel"
+  missing=""
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    case "
+$hits" in
+      *"
+$hit") : ;;
+      *"
+$hit
+"*) : ;;
+      *) missing="$missing $hit" ;;
+    esac
+  done <<EOF
+$allowed
+EOF
 
-  pass "artifact: the only Homebrew paths are the two prefixes an existing \`brew\` lives at"
+  [ -z "$missing" ] \
+    || fail "the activation package no longer names these Homebrew paths, so part of the setup has stopped happening:$missing"
+
+  # And the pair this architecture's own steps are built for, named explicitly
+  # so that a build for the wrong prefix is a failure rather than a set that
+  # happens to match because the shared library mentions both.
+  prefix=/opt/homebrew
+  library=/opt/homebrew/Library
+  if [ "$SYSTEM" = x86_64-darwin ]; then
+    prefix=/usr/local
+    library=/usr/local/Homebrew/Library
+  fi
+  assert_contains "$(cat "$setup")" "\"$prefix\" \"$library\"" \
+    "the prefix-setup step is not built for this architecture's Homebrew prefix"
+
+  pass "artifact: the Homebrew paths are exactly the six this configuration manages"
 }
 
 test_flake_pulls_in_no_system_configuration_tool
@@ -612,6 +872,7 @@ test_configuration_has_no_system_level_options
 test_every_managed_file_target_is_inside_home
 test_home_directory_matches_the_declared_one
 test_no_tracked_script_escalates_privileges
+test_the_privilege_scan_still_catches_an_escalation
 test_nothing_here_installs_homebrew
 test_the_homebrew_scan_tells_an_invocation_from_a_path_test
 test_the_only_homebrew_paths_are_the_two_prefixes
