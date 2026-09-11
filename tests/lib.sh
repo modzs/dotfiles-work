@@ -233,3 +233,31 @@ dotfiles_brew_bundle_script() {
   [ -n "$found" ] || return 1
   printf '%s\n' "$found"
 }
+
+# The store path of the Homebrew prefix-setup step, found the same way and for
+# the same reason: only its presence in the built activate script proves that
+# the script the tests exercise is the one activation runs.
+dotfiles_homebrew_prefix_script() {
+  local generation=$1 found
+  found=$(grep -o '/nix/store/[a-z0-9]*-dotfiles-work-homebrew-prefix' "$generation/activate" \
+    | head -n1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# The two store FILES the prefix-setup step names, one per line: the shared
+# library it sources, then the generated bin/brew it links. Read back out of
+# the script rather than rebuilt from a Nix expression, so what the tests look
+# at is what activation actually uses.
+#
+# The patched Homebrew tree it also names is deliberately not returned. That is
+# a directory holding all of upstream Homebrew, and a caller scanning it would
+# be reading Homebrew's source rather than this repository's output.
+dotfiles_homebrew_prefix_script_files() {
+  local script=$1 library binary
+  library=$(sed -n 's|^\. \(/nix/store/[^ ]*\)$|\1|p' "$script" | head -n1)
+  binary=$(sed -n 's|^bin_brew="\(.*\)"$|\1|p' "$script" | head -n1)
+  [ -n "$library" ] || return 1
+  [ -n "$binary" ] || return 1
+  printf '%s\n%s\n' "$library" "$binary"
+}

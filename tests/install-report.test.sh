@@ -102,8 +102,15 @@ test_the_report_says_what_was_installed_and_where() {
   # nothing, unless this says so first.
   assert_contains "$output" "Open a new terminal" \
     "the report should say the tools need a new shell"
-  assert_contains "$output" "installs no Homebrew" \
-    "the report should say this repo never installs Homebrew itself"
+  # Reversed, deliberately, and with the whole reason recorded here: this repo
+  # used to tell the user it would never install Homebrew, and it now does
+  # install one. A closing report that still said the old thing would be the
+  # clearest possible example of the failure this file exists to prevent - a
+  # run that did one thing while saying it did another.
+  assert_contains "$output" "pinned by flake.lock" \
+    "the report should say the Homebrew it installed is pinned"
+  assert_not_contains "$output" "installs no Homebrew" \
+    "the report still claims this repo never installs Homebrew, which is no longer true"
 
   pass "report: says what was installed, where it went, and why this shell cannot see it"
 }

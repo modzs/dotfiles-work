@@ -1,41 +1,50 @@
 #!/usr/bin/env bash
 # Behaviour tests for the Homebrew half of this configuration.
 #
-# This repository drives a Homebrew that the user installed themselves: home.nix
-# generates a Brewfile and a Home Manager activation step applies it on every
-# switch. That is the one place where this configuration reaches outside the
-# home directory, so what it does there is pinned here rather than described in
-# prose - README.md and AGENTS.md say what the rules are; these checks are what
-# holds the code to them.
+# This repository installs Homebrew and then drives it. Homebrew's source is a
+# pinned flake input; home.nix patches the store copy and generates a `brew`
+# around it; bootstrap.sh creates the standard prefix once, behind the single
+# `sudo` in this repo; a Home Manager activation step links the two together on
+# every switch; and a second step hands that Homebrew a generated Brewfile.
+# That is where this configuration reaches outside the home directory, so what
+# it does there is pinned here rather than described in prose - README.md and
+# AGENTS.md say what the rules are; these checks are what holds the code to them.
 #
-# Five properties, in order of how much damage getting them wrong would do:
+# Seven properties, in order of how much damage getting them wrong would do:
 #
-# - the step never removes anything, and cannot be talked into it. Homebrew on
-#   this machine is the user's own general-purpose package manager, and the
-#   setup this repo replaces drove it with `cleanup = "zap"`, which uninstalls
+# - a prefix holding a Homebrew this repo did not create is never converted,
+#   migrated or deleted. It is reported and the run stops - at the preflight
+#   before anything is installed, again as root immediately before writing, and
+#   again in the activation step. On a work Mac, removing a package manager's
+#   tree on the owner's behalf is the worst thing in this file;
+# - the Brewfile step never removes anything, and cannot be talked into it.
+#   Homebrew here is the user's general-purpose package manager, and the setup
+#   this repo replaces drove it with `cleanup = "zap"`, which uninstalls
 #   whatever the Brewfile does not list. Software installed by hand for
 #   unrelated reasons - an employer's security agent included - must survive
 #   every rebuild. That means passing no cleanup flag AND refusing the two
 #   environment variables that turn a cleanup on without one;
-# - the step runs after everything that writes the home directory. Before the
-#   Brewfile is written it applies the previous rebuild's package list; before
-#   the on-change hooks it can strand the font install permanently, because
-#   this is the one step that fails on an otherwise healthy machine;
-# - a Mac without Homebrew gets an explanation, not `brew: command not found`,
-#   and gets it from bootstrap.sh's preflight before anything is installed as
-#   well as from the step itself;
+# - the privileged step is idempotent and skips itself once the marker is
+#   there, which is what makes root a once-per-machine cost rather than a
+#   per-rebuild one;
+# - the unprivileged step needs no root, and refuses with an explanation
+#   pointing at bootstrap.sh rather than trying and failing on permissions;
+# - the steps run in the right order: the prefix before the Brewfile, and both
+#   after everything that writes the home directory;
 # - nothing is installed by both Nix and Homebrew, because two copies on PATH
 #   are decided by an ordering the user never chose;
 # - the Brewfile lands inside the home directory, and lists what home.nix says.
 #
-# The step is exercised by running it, with a recording stand-in for `brew`.
-# Asserting on its source text would prove that the words are there; running it
-# proves what it does with them. One check cannot work that way: the ordering,
-# which is a property of the built activate script rather than of the step. It
-# says so where it sits.
+# The steps are exercised by running them - the Brewfile step against a
+# recording stand-in for `brew`, the prefix steps against a stand-in prefix in a
+# temp directory. Asserting on source text would prove that the words are there;
+# running it proves what it does with them. One check cannot work that way: the
+# ordering, which is a property of the built activate script rather than of any
+# step. It says so where it sits.
 #
-# Nothing here activates a configuration, and nothing here may. See the standing
-# rule in AGENTS.md, and the note further down about the one outcome this file
+# Nothing here activates a configuration, nothing here runs `sudo`, and nothing
+# here touches the real /opt/homebrew or /usr/local. See the standing rule in
+# AGENTS.md, and the notes further down about the two outcomes this file
 # deliberately leaves untested as a result.
 set -u
 
@@ -47,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 12
+dotfiles_test_expect 21
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -417,67 +426,392 @@ test_the_homebrew_step_runs_after_the_brewfile_is_written() {
 # AGENTS.md carries the standing rule and the full list of paths a redirected
 # homeDirectory does not redirect.
 
-# --- and is told so before anything has been installed ------------------------
+# --- the prefix: created once, never converted, never needing root ------------
+#
+# This is the half of the Homebrew story that is new, and the half that can do
+# real damage. Everything below runs against a stand-in prefix in a temp
+# directory: a real one is /opt/homebrew or /usr/local, both absolute and
+# unredirectable, and a test that wrote to either would be reconfiguring the
+# machine running the suite.
+#
+# That stand-in is possible because the library takes the prefix as an argument
+# rather than reading it from the environment. The prefix a real run uses is
+# decided by the architecture and by nothing else - see
+# test_the_prefix_the_setup_step_manages_is_this_architectures - so there is no
+# variable a test could point somewhere safe even if one were wanted.
+
+# Ask lib/homebrew-present.sh a question in a clean bash, the way AGENTS.md
+# requires: sourcing repo libraries into the suite's own shell is how a function
+# comes to be tested against a definition that is not the one production uses.
+dotfiles_homebrew_lib() {
+  /bin/bash -c '. "$1/lib/homebrew-present.sh"; shift; "$@"' _ "$ROOT" "$@"
+}
+
+# A prefix directory that exists and has no Homebrew in it - the state of
+# /usr/local on every Intel Mac, and of /opt/homebrew on a Mac that has never
+# had Homebrew.
+dotfiles_fresh_prefix() {
+  local root
+  root=$(dotfiles_test_tmproot dotfiles-prefix)
+  mkdir -p "$root/prefix"
+  printf '%s\n' "$root/prefix"
+}
+
+# Run the privileged initializer against a stand-in prefix, as the current user
+# rather than as root.
+#
+# Unprivileged is not a compromise here, it is most of the point: everything the
+# script does after the prefix directory exists is a mkdir, a chmod, or a chown
+# and chgrp to the caller's own account, and macOS permits all of those to the
+# owner. The one branch that genuinely needs root is
+# `/usr/bin/install -d -o root -g wheel`, which only runs when the prefix
+# directory does not exist at all, and every fixture below creates it first.
+# What that leaves untested is named in the note at the end of this section.
+dotfiles_run_initializer() {
+  local prefix=$1
+  /bin/bash "$ROOT/lib/homebrew-initialize-prefix.sh" \
+    "$prefix" "$prefix/Library" "$(whoami)" "$(id -gn)" 2>&1
+}
+
+test_the_privileged_step_creates_the_prefix_and_marks_it() {
+  local prefix output status=0
+
+  prefix=$(dotfiles_fresh_prefix)
+
+  output=$(dotfiles_run_initializer "$prefix") || status=$?
+  [ "$status" = 0 ] || fail "the initializer failed against a stand-in prefix (exit $status): $output"
+
+  # Homebrew's own layout. Not every directory it creates - that list is
+  # upstream's and it moves - but the ones whose absence would break a `brew
+  # install` on the first run.
+  for dir in bin etc lib share var opt Cellar Caskroom Frameworks var/homebrew; do
+    [ -d "$prefix/$dir" ] \
+      || fail "the initializer did not create $dir in the prefix"
+  done
+  [ -d "$prefix/Library" ] \
+    || fail "the initializer did not create the Homebrew library directory"
+
+  # The marker, which is the whole hinge: it is what every later run reads to
+  # decide that root is not needed again.
+  [ -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the initializer did not leave the marker, so every rebuild would ask for a password"
+
+  # And the property that makes the rest of this configuration unprivileged: the
+  # two directories activation writes into belong to this account now.
+  [ -w "$prefix/Library" ] \
+    || fail "the initializer left the library unwritable by its owner"
+  [ -w "$prefix/bin" ] \
+    || fail "the initializer left bin unwritable by its owner"
+
+  pass "prefix: the privileged step creates Homebrew's layout, marks it, and hands it over"
+}
+
+test_the_privileged_step_does_nothing_the_second_time() {
+  local prefix output status=0 before after
+
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed on its first run"
+
+  # A marker whose timestamp can be compared. The question this answers is not
+  # "did it print something reassuring" but "did it write again at all" - a
+  # second run that redid the chowns would be asking for a password on every
+  # bootstrap, which is the cost this design exists to pay only once.
+  before=$(ls -lT "$prefix/.managed_by_nix_darwin")
+  output=$(dotfiles_run_initializer "$prefix") || status=$?
+  after=$(ls -lT "$prefix/.managed_by_nix_darwin")
+
+  [ "$status" = 0 ] || fail "the initializer failed on an already-managed prefix (exit $status): $output"
+  assert_contains "$output" "already set up" \
+    "the initializer did not say it had nothing to do"
+  assert_eq "$after" "$before" \
+    "the initializer rewrote the marker on a prefix that was already managed"
+
+  pass "prefix: the privileged step recognises its own marker and does nothing twice"
+}
+
+test_the_privileged_step_refuses_a_homebrew_it_did_not_install() {
+  local prefix output status=0
+
+  # What an existing Homebrew looks like from outside: a real directory at
+  # $HOMEBREW_LIBRARY/Homebrew. That is the shape on both architectures, which
+  # is why nix-homebrew tests that path and why this does.
+  prefix=$(dotfiles_fresh_prefix)
+  mkdir -p "$prefix/Library/Homebrew"
+  printf 'pretend this is Homebrew\n' >"$prefix/Library/Homebrew/brew.sh"
+
+  output=$(dotfiles_run_initializer "$prefix") || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the initializer accepted a prefix that already contains a Homebrew"
+
+  # It must still be there, untouched. This is the assertion the whole design
+  # turns on: the owner's instruction was that an existing Homebrew is never
+  # converted and never removed, and a message saying so would be worthless if
+  # the tree were gone.
+  [ -f "$prefix/Library/Homebrew/brew.sh" ] \
+    || fail "the initializer removed part of an existing Homebrew, which it must never do"
+  [ ! -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the initializer marked a prefix it refused, so a later run would treat it as managed"
+
+  assert_contains "$output" "$prefix/Library/Homebrew" \
+    "the refusal does not name what it found in the way"
+  assert_contains "$output" "Nothing has been changed" \
+    "the refusal does not say that nothing was changed"
+  assert_contains "$output" "uninstall the existing one yourself" \
+    "the refusal does not say what the user can do about it"
+
+  pass "prefix: the privileged step refuses an existing Homebrew and leaves it exactly as it is"
+}
+
+test_the_prefix_setup_step_links_homebrew_without_root() {
+  local prefix output status=0 target
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "prefix setup check (nix not found)"
+    return 0
+  fi
+
+  # The real store paths, out of the built artifact, so this exercises the code
+  # activation runs against the files activation links.
+  #
+  # The patched Homebrew tree is read out of the script here rather than through
+  # a shared helper, because the only other caller - the artifact path scan in
+  # tests/safety.test.sh - must NOT have it: that scan walks every file it is
+  # given, and this one is a directory holding all of upstream Homebrew.
+  local generation setup extra library binary code
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  setup=$(dotfiles_homebrew_prefix_script "$generation") \
+    || fail "the activation script does not run a Homebrew prefix-setup step at all"
+  extra=$(dotfiles_homebrew_prefix_script_files "$setup") \
+    || fail "the prefix-setup step names neither a library to source nor a brew to link"
+  library=$(printf '%s\n' "$extra" | sed -n 1p)
+  binary=$(printf '%s\n' "$extra" | sed -n 2p)
+  code=$(sed -n 's|^brew_code="\(.*\)"$|\1|p' "$setup" | head -n1)
+  [ -n "$code" ] || fail "the prefix-setup step names no Homebrew code to link"
+  [ -d "$code" ] || fail "the Homebrew code the prefix-setup step names is not there"
+
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+
+  # The library out of the STORE, not out of the working tree: that is the copy
+  # the activation step sources, and a test reading the other one would pass
+  # while the built artifact was broken.
+  output=$(/bin/bash -c \
+    '. "$1"; dotfiles_homebrew_prefix_link "$2" "$2/Library" "$3" "$4"' \
+    _ "$library" "$prefix" "$code" "$binary" 2>&1) || status=$?
+  [ "$status" = 0 ] || fail "the prefix-setup step failed against a prepared prefix (exit $status): $output"
+
+  # Code from the store, state in the prefix. A symlink and not a copy is the
+  # property that makes a pinned Homebrew pinned: there is no checkout here for
+  # `brew update` to fast-forward.
+  [ -L "$prefix/Library/Homebrew" ] \
+    || fail "the setup step did not symlink the Homebrew code into the prefix"
+  target=$(readlink "$prefix/Library/Homebrew")
+  assert_eq "$target" "$code" \
+    "the setup step linked the Homebrew code somewhere other than where it was told"
+
+  [ -L "$prefix/bin/brew" ] \
+    || fail "the setup step did not link a brew into the prefix"
+  target=$(readlink "$prefix/bin/brew")
+  assert_eq "$target" "$binary" \
+    "the setup step linked a brew other than the generated one"
+
+  # The fake repository Homebrew insists on finding. It is not a git repository
+  # and is not meant to be one; what matters is that it exists and that .git/HEAD
+  # is there for Homebrew's version probe to read.
+  [ -f "$prefix/Library/.homebrew-is-managed-by-nix/.git/HEAD" ] \
+    || fail "the setup step did not build the repository directory Homebrew expects"
+
+  # Idempotent, because it runs on every switch. A second call must reach the
+  # same state rather than tripping over its own symlinks.
+  output=$(/bin/bash -c \
+    '. "$1"; dotfiles_homebrew_prefix_link "$2" "$2/Library" "$3" "$4"' \
+    _ "$library" "$prefix" "$code" "$binary" 2>&1) || status=$?
+  [ "$status" = 0 ] || fail "the prefix-setup step failed on a second run (exit $status): $output"
+  assert_eq "$(readlink "$prefix/Library/Homebrew")" "$code" \
+    "a second run of the setup step did not leave the code link where the first did"
+
+  pass "prefix: the setup step links the store Homebrew into a prepared prefix, twice over"
+}
+
+test_the_prefix_setup_step_refuses_a_prefix_bootstrap_has_not_prepared() {
+  local prefix output status=0
+
+  # A prefix with nothing in it: the state before bootstrap.sh's step 5. The
+  # setup step must not try to create it - that needs root, and root belongs to
+  # bootstrap.sh - so it has to stop and say where the fix is.
+  prefix=$(dotfiles_fresh_prefix)
+
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_link \
+    "$prefix" "$prefix/Library" /nix/store/unused-code /nix/store/unused-brew 2>&1) || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the setup step accepted a prefix that has never been initialized"
+  [ ! -e "$prefix/bin" ] \
+    || fail "the setup step wrote into a prefix it had not been given"
+
+  assert_contains "$output" "./bootstrap.sh" \
+    "the failure does not point at the script that creates the prefix"
+  assert_not_contains "$output" "Permission denied" \
+    "the setup step tried and failed on permissions instead of checking first"
+
+  pass "prefix: the setup step refuses an unprepared prefix and points at bootstrap.sh"
+}
+
+test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install() {
+  local prefix output status=0
+
+  # The same refusal as the privileged step's, from the other end of the run. A
+  # machine can acquire a Homebrew between bootstrap and a later rebuild, and
+  # the switch must not quietly link over it.
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  rm -rf "$prefix/Library/Homebrew"
+  mkdir -p "$prefix/Library/Homebrew"
+  printf 'pretend this is Homebrew\n' >"$prefix/Library/Homebrew/brew.sh"
+
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_link \
+    "$prefix" "$prefix/Library" /nix/store/unused-code /nix/store/unused-brew 2>&1) || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the setup step linked over a Homebrew this repository did not install"
+  [ -f "$prefix/Library/Homebrew/brew.sh" ] \
+    || fail "the setup step removed part of an existing Homebrew, which it must never do"
+  assert_contains "$output" "refusing to touch $prefix" \
+    "the refusal does not name the prefix it refused"
+
+  pass "prefix: the setup step refuses an existing Homebrew even on a marked prefix"
+}
+
+test_the_prefix_state_tells_the_three_cases_apart() {
+  local prefix
+
+  # The one function all three refusals above are built on, asked directly.
+  # Each of the checks that use it passes by the state coming out right, which
+  # is also what a function stuck on one answer would look like.
+  prefix=$(dotfiles_fresh_prefix)
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    fresh "an empty prefix directory is not reported as fresh"
+
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    managed "an initialized prefix is not reported as managed"
+
+  # A symlink into the store is ours; anything else is not. Both directions
+  # matter: reporting our own links as occupied would make every second switch
+  # fail, and reporting a real directory as ours is the failure that deletes
+  # somebody's Homebrew.
+  mkdir -p "$prefix/bin"
+  ln -shf /nix/store/whatever-brew "$prefix/bin/brew"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    managed "a brew symlinked into the Nix store is not recognised as this repository's own"
+
+  rm -f "$prefix/bin/brew"
+  printf '#!/bin/sh\n' >"$prefix/bin/brew"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    occupied "a real brew file in the prefix is not reported as occupied"
+
+  # A symlink pointing somewhere that is not the store is not ours either - a
+  # Homebrew someone relocated, say. Fail closed.
+  rm -f "$prefix/bin/brew"
+  ln -shf /usr/bin/true "$prefix/bin/brew"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    occupied "a brew symlinked outside the Nix store is not reported as occupied"
+
+  pass "prefix: the state check tells fresh, managed and occupied apart, and fails closed"
+}
+
+# --- the preflight says what will happen, before anything is installed --------
 #
 # The activation step's message arrives at the end of a switch. On a first
 # bootstrap that is too late to be useful: Nix has been installed, a password
 # has been asked for, and the home directory has been written. So bootstrap.sh
-# asks the same question up front, through lib/homebrew-present.sh, and these
-# two checks run that library directly rather than running bootstrap.sh - which
+# asks the same questions up front, through lib/homebrew-present.sh, and these
+# checks run that library directly rather than running bootstrap.sh - which
 # would install Nix.
 #
-# The library's rule has to be the same rule home.nix's step uses, or bootstrap
-# passes and the rebuild fails later. Both are exercised the same way here,
-# through HOMEBREW_PREFIX, which is what makes that comparison meaningful.
+# What the preflight refuses has inverted, and that is the point of these two.
+# It used to refuse a Mac with no Homebrew, because this repo could not install
+# one. It now refuses a Mac whose prefix already HAS one, because it will not
+# convert what it did not create - and an absent Homebrew is the ordinary state
+# of the machine this is designed for.
 
-test_the_preflight_refuses_a_mac_without_homebrew() {
-  local root output status=0
+test_the_preflight_refuses_a_prefix_that_already_has_a_homebrew() {
+  local prefix output status=0
 
-  root=$(dotfiles_test_tmproot dotfiles-preflight-absent)
-  mkdir -p "$root/empty"
+  prefix=$(dotfiles_fresh_prefix)
+  mkdir -p "$prefix/Library/Homebrew"
 
-  output=$(HOMEBREW_PREFIX="$root/empty" /bin/bash -c \
-    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_require' _ "$ROOT" 2>&1) \
-    || status=$?
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
+    "$prefix" "$prefix/Library" 2>&1) || status=$?
 
   [ "$status" != 0 ] \
-    || fail "the preflight accepted a machine with no Homebrew, so bootstrap.sh would install Nix and then fail"
+    || fail "the preflight accepted a prefix holding a Homebrew this repo did not install"
 
-  # The same three things the activation step's message has to say, because a
-  # user who hits this one has to be told the same thing.
-  assert_contains "$output" "https://brew.sh" \
-    "the preflight does not say where Homebrew comes from"
-  assert_contains "$output" "./bootstrap.sh" \
-    "the preflight does not say what to do once Homebrew is installed"
+  assert_contains "$output" "$prefix/Library/Homebrew" \
+    "the preflight does not name what it found in the way"
+  assert_contains "$output" "Nothing has been installed yet" \
+    "the preflight does not say that stopping here costs nothing"
   assert_not_contains "$output" "command not found" \
     "the preflight let the shell report a missing command instead of explaining"
 
-  pass "preflight: a Mac without Homebrew is refused before anything is installed"
+  pass "preflight: a Mac with its own Homebrew is refused before anything is installed"
 }
 
-test_the_preflight_accepts_a_mac_with_homebrew() {
-  local root output status=0
+test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do() {
+  local prefix output status=0
 
-  root=$(dotfiles_test_tmproot dotfiles-preflight-present)
-  mkdir -p "$root/prefix/bin"
-  # Never executed - the library asks whether the path is there, and must not
-  # run what it finds.
-  printf '#!/bin/sh\nexit 99\n' >"$root/prefix/bin/brew"
-  chmod +x "$root/prefix/bin/brew"
+  # The case that used to be a refusal. A fresh work Mac has no Homebrew, this
+  # configuration installs one, and the user is told that a password is coming
+  # rather than being turned away.
+  prefix=$(dotfiles_fresh_prefix)
 
-  output=$(HOMEBREW_PREFIX="$root/prefix" /bin/bash -c \
-    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_require' _ "$ROOT" 2>&1) \
-    || status=$?
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
+    "$prefix" "$prefix/Library" 2>&1) || status=$?
 
   [ "$status" = 0 ] \
-    || fail "the preflight refused a machine that has Homebrew where HOMEBREW_PREFIX says (exit $status)"
-  # It reports the path rather than returning it - see the comment on the
-  # function - so this asserts on what the user is told.
-  assert_contains "$output" "$root/prefix/bin/brew" \
-    "the preflight did not report which brew it found"
+    || fail "the preflight refused a Mac with no Homebrew, which is the machine this is for (exit $status)"
+  assert_contains "$output" "$prefix" \
+    "the preflight does not say which prefix it is talking about"
+  assert_contains "$output" "password" \
+    "the preflight does not warn that creating the prefix needs a password"
 
-  pass "preflight: a Mac with Homebrew passes, and the brew is located not run"
+  # And the already-done case, which is what a re-run of bootstrap.sh sees.
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
+    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  [ "$status" = 0 ] \
+    || fail "the preflight refused a prefix it had already set up (exit $status)"
+  assert_contains "$output" "already set up" \
+    "the preflight does not say the prefix is already done"
+  assert_not_contains "$output" "password" \
+    "the preflight still warns about a password on a prefix that needs none"
+
+  pass "preflight: a Mac with no Homebrew is accepted, and told which step will ask for a password"
 }
+
+# --- what is deliberately NOT tested about the prefix -------------------------
+#
+# Two things, and they should stay visible rather than be papered over.
+#
+# The `/usr/bin/install -d -o root -g wheel` branch never runs here. It is the
+# one thing in this repository that genuinely requires root, it only happens
+# when the prefix directory does not exist at all, and exercising it would mean
+# running the suite under sudo and creating a directory owned by root on the
+# machine running the tests. Every fixture above creates the prefix directory
+# first, which is not a contrivance: /usr/local exists on every Mac, so on Intel
+# that is the branch a real run takes too.
+#
+# And nothing here runs `brew`. The bundle step is exercised against a recording
+# stand-in, and the generated launcher is read rather than executed: running it
+# would use the real prefix baked into it, which is the machine's own
+# /opt/homebrew. What the generated launcher SAYS is checked, in
+# test_the_generated_brew_is_pinned_to_this_prefix below.
 
 # --- the two implementations of "where is brew" agree -------------------------
 
@@ -611,18 +945,158 @@ test_a_missing_homebrew_fails_with_an_explanation() {
   [ "$status" != 0 ] \
     || fail "the Homebrew step succeeded on a machine with no Homebrew"
 
-  # The failure has to name this repository, say what to do, and point at the
-  # place Homebrew comes from. A raw "command not found" says none of that.
+  # The failure has to name this repository and say what to do. A raw "command
+  # not found" says neither.
+  #
+  # What it says has changed with the design, and the assertions with it. It
+  # used to send the user to brew.sh, because Homebrew was theirs to install;
+  # now Homebrew comes from a pinned flake input and the prefix comes from
+  # ./bootstrap.sh, so that is where a machine without one is sent. A test still
+  # asserting the old sentence would have been pinning prose that had become
+  # wrong.
   assert_contains "$output" "dotfiles-work" \
     "the failure does not say which configuration it came from"
-  assert_contains "$output" "https://brew.sh" \
-    "the failure does not say where Homebrew comes from"
-  assert_contains "$output" "./rebuild.sh" \
-    "the failure does not say what to do once Homebrew is installed"
+  assert_contains "$output" "./bootstrap.sh" \
+    "the failure does not say what to run to get a Homebrew"
+  assert_contains "$output" "flake.lock" \
+    "the failure does not say that this configuration installs its own Homebrew"
   assert_not_contains "$output" "command not found" \
     "the step let the shell report a missing command instead of explaining"
 
   pass "homebrew: a Mac without Homebrew gets an explanation and a non-zero exit"
+}
+
+# --- the two answers to "which prefix" agree ----------------------------------
+
+test_the_prefix_the_setup_step_manages_is_this_architectures() {
+  local generation setup expected searched bundle setup_library bundle_library
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "prefix agreement check (nix not found)"
+    return 0
+  fi
+
+  # The prefix is decided twice by construction and must be decided the same way
+  # both times: at evaluation, by home.nix, which bakes it into the generated
+  # `brew` and into the setup step; and at run time, by
+  # lib/homebrew-present.sh, which is what bootstrap.sh asks before Nix exists.
+  # Nix reads it off `pkgs.stdenv.hostPlatform`; the shell reads it off
+  # `uname -m`. Two mechanisms, one answer, and nothing but this check holding
+  # them together.
+  #
+  # The third party is the Brewfile step, which still searches rather than
+  # assuming - it honours HOMEBREW_PREFIX, and that is deliberate, see the
+  # comment on dotfiles_homebrew_find. What must be true is that with nothing in
+  # the environment, the first place it looks is the prefix the setup step just
+  # populated. Otherwise a first switch would set Homebrew up and then fail to
+  # find it.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  setup=$(dotfiles_homebrew_prefix_script "$generation") \
+    || fail "the activation script does not run a Homebrew prefix-setup step at all"
+
+  expected=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix) \
+    || fail "the library could not resolve this Mac's Homebrew prefix"
+  assert_contains "$(cat "$setup")" "\"$expected\"" \
+    "the built prefix-setup step manages a different prefix than the library reports"
+
+  # And the library's own two answers have to be consistent with each other:
+  # /opt/homebrew has its library inside it, /usr/local keeps it one level down.
+  if [ "$expected" = /opt/homebrew ]; then
+    assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_library)" /opt/homebrew/Library \
+      "the Apple silicon library path is not Homebrew's"
+  else
+    assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_library)" /usr/local/Homebrew/Library \
+      "the Intel library path is not Homebrew's"
+  fi
+
+  # And the Brewfile step, which has to look where the setup step installs. Two
+  # assertions, because they fail for different reasons.
+  #
+  # First: both steps source the SAME library file. That is what makes "one
+  # search" a fact rather than a claim - this search used to be written out
+  # twice, and the copies drifted.
+  bundle=$(dotfiles_brew_bundle_script "$generation") \
+    || fail "the activation script does not run a Homebrew step at all"
+  setup_library=$(sed -n 's|^\. \(/nix/store/[^ ]*\)$|\1|p' "$setup" | head -n1)
+  bundle_library=$(sed -n 's|^ *\. \(/nix/store/[^ ]*\)$|\1|p' "$bundle" | head -n1)
+  [ -n "$bundle_library" ] \
+    || fail "the Brewfile step sources no library, so it has a second copy of the search"
+  assert_eq "$bundle_library" "$setup_library" \
+    "the Brewfile step and the prefix-setup step source different libraries"
+
+  # Second: with nothing in the environment, the places that library would look
+  # include the prefix the setup step populates. Asked by running the function
+  # rather than by reading the list out of it.
+  # shellcheck disable=SC2016  # $1 is the inner shell's argument, not this one's
+  searched=$(env -u HOMEBREW_PREFIX /bin/bash -c \
+    '. "$1"; dotfiles_homebrew_searched' _ "$setup_library") \
+    || fail "the library could not say where it would look for brew"
+  assert_contains "$searched" "$expected/bin/brew" \
+    "the Brewfile step would not look where the prefix-setup step installs"
+
+  pass "homebrew: the prefix Nix bakes in, the one the shell resolves, and the one the Brewfile step looks in are the same"
+}
+
+test_the_generated_brew_is_pinned_to_this_prefix() {
+  local generation setup extra binary content expected version
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "generated brew check (nix not found)"
+    return 0
+  fi
+
+  # Read, never run. Running it would use the prefix baked into it, which on
+  # this machine is the real /opt/homebrew or /usr/local - so this asserts what
+  # the launcher declares, and tests/safety.test.sh asserts that those are the
+  # only Homebrew paths in the artifact at all.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  setup=$(dotfiles_homebrew_prefix_script "$generation") \
+    || fail "the activation script does not run a Homebrew prefix-setup step at all"
+  extra=$(dotfiles_homebrew_prefix_script_files "$setup") \
+    || fail "the prefix-setup step names no brew to link"
+  binary=$(printf '%s\n' "$extra" | sed -n 2p)
+  content=$(cat "$binary")
+  expected=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix)
+
+  # The shebang, which must survive unpatched. nix-homebrew's reason, kept
+  # because it is still true here: a patched one breaks
+  # `arch -x86_64 /usr/local/bin/brew` on Apple silicon. Nothing in the build
+  # rewrites it today, so this is a check against a future change that would.
+  assert_eq "$(head -n1 "$binary")" "#!/bin/bash" \
+    "the generated brew's shebang has been patched, which breaks it under arch -x86_64"
+
+  assert_contains "$content" "export HOMEBREW_PREFIX=\"$expected\"" \
+    "the generated brew does not declare this Mac's Homebrew prefix"
+  assert_contains "$content" "export HOMEBREW_REPOSITORY=\"\$HOMEBREW_LIBRARY/.homebrew-is-managed-by-nix\"" \
+    "the generated brew does not point at the repository directory the setup step builds"
+
+  # The whole point of pinning: no auto-update variable in either direction.
+  # nix-homebrew sets HOMEBREW_NO_AUTO_UPDATE when it pins taps; this
+  # configuration pins no taps and this repository's standing rule is that it
+  # never touches that variable at all, because a slow or proxied network is
+  # exactly why someone sets it themselves.
+  assert_not_contains "$content" "HOMEBREW_NO_AUTO_UPDATE" \
+    "the generated brew sets HOMEBREW_NO_AUTO_UPDATE, which is the user's to decide"
+
+  # It has to end in upstream's own exec, which is what proves the tail was
+  # spliced in whole rather than truncated.
+  assert_contains "$content" "exec /usr/bin/env -i" \
+    "the generated brew does not end in the exec upstream's bin/brew ends in"
+
+  # And git has to be on the PATH it hands Homebrew, or every tap operation
+  # fails in a way that looks like a network problem.
+  assert_contains "$content" "PATH=\"/nix/store/" \
+    "the generated brew does not prepend a Nix runtime PATH, so Homebrew would have no git"
+
+  # The version is embedded rather than derived from a git repository that this
+  # layout deliberately does not have, and it is the version flake.lock pins.
+  version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"]["brew-src"]["original"]["ref"])' \
+    "$ROOT/flake.lock") \
+    || fail "could not read the pinned Homebrew version from flake.lock"
+  assert_contains "$(cat "$setup")" "brew-$version-patched" \
+    "the Homebrew the setup step links is not the version flake.lock pins"
+
+  pass "homebrew: the generated brew is pinned to this prefix, keeps its shebang, and sets no auto-update"
 }
 
 # --- nothing is installed twice -----------------------------------------------
@@ -764,10 +1238,19 @@ test_the_homebrew_step_installs_and_cannot_remove
 test_the_homebrew_step_does_not_touch_auto_update
 test_the_homebrew_step_neutralizes_the_cleanup_variables
 test_the_homebrew_step_runs_after_the_brewfile_is_written
-test_the_preflight_refuses_a_mac_without_homebrew
-test_the_preflight_accepts_a_mac_with_homebrew
+test_the_privileged_step_creates_the_prefix_and_marks_it
+test_the_privileged_step_does_nothing_the_second_time
+test_the_privileged_step_refuses_a_homebrew_it_did_not_install
+test_the_prefix_setup_step_links_homebrew_without_root
+test_the_prefix_setup_step_refuses_a_prefix_bootstrap_has_not_prepared
+test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install
+test_the_prefix_state_tells_the_three_cases_apart
+test_the_preflight_refuses_a_prefix_that_already_has_a_homebrew
+test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do
 test_the_preflight_and_the_step_agree_on_where_brew_is
 test_a_missing_homebrew_fails_with_an_explanation
+test_the_prefix_the_setup_step_manages_is_this_architectures
+test_the_generated_brew_is_pinned_to_this_prefix
 test_no_tool_is_installed_by_both_nix_and_homebrew
 test_the_duplicate_guard_catches_a_differently_spelled_collision
 

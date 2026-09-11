@@ -1,4 +1,4 @@
-{ config, lib, pkgs, user, homeDirectory, ... }:
+{ config, lib, pkgs, user, homeDirectory, brew-src, brewVersion, ... }:
 
 let
   # Where this repository lives. bootstrap.sh points ~/.dotfiles at it, and the
@@ -10,6 +10,224 @@ let
   # `npm install -g` needs somewhere writable, and that somewhere has to be
   # inside $HOME: /usr/local is not this configuration's to write.
   npmPrefix = "${config.home.homeDirectory}/.npm-global";
+
+  # === Homebrew, as a Nix package ============================================
+  #
+  # Homebrew itself comes from the `brew-src` flake input: its code lives in the
+  # Nix store, flake.lock pins the commit, and the prefix holds nothing but a
+  # symlink pointing at it. There is no git checkout in /opt for `brew update`
+  # to fast-forward, so the Homebrew this Mac runs is the Homebrew flake.lock
+  # says it is until someone changes the lock.
+  #
+  # The mechanism is a port of nix-homebrew's, which is the thing the owner's
+  # personal configuration uses and which does not apply here: nix-homebrew
+  # ships exactly one output, a nix-darwin module, and it writes
+  # `system.activationScripts` and `environment.systemPackages` and asserts on
+  # `system.primaryUser`. None of those exist in standalone Home Manager, and
+  # importing the module would mean importing nix-darwin, which is the one thing
+  # this repository must never do. So the technique is ported, not the module -
+  # patch the store copy, generate a prefix-specific `bin/brew`, do the
+  # privileged prefix creation exactly once, and do everything else as the user.
+  #
+  #   BSD 2-Clause License
+  #   Copyright (c) 2023 Zhaofeng Li and the nix-homebrew contributors
+  #
+  # AGENTS.md carries the design rule this narrows and README.md says the same
+  # thing to a user. tests/safety.test.sh and tests/homebrew.test.sh hold what
+  # is left.
+
+  # Where this Mac's Homebrew goes. Decided by the architecture and by nothing
+  # else, because Homebrew's prebuilt bottles are built for these two prefixes
+  # and a Homebrew anywhere else compiles everything from source. That is also
+  # the rule lib/homebrew-present.sh applies at runtime, and
+  # tests/homebrew.test.sh compares the two.
+  homebrewPrefix =
+    if pkgs.stdenv.hostPlatform.isAarch64 then "/opt/homebrew" else "/usr/local";
+
+  # On Intel the prefix is /usr/local, shared with everything else on the
+  # machine, so Homebrew keeps its library one level down. Upstream Homebrew's
+  # layout, not a choice made here.
+  homebrewLibrary =
+    if pkgs.stdenv.hostPlatform.isAarch64
+    then "/opt/homebrew/Library"
+    else "/usr/local/Homebrew/Library";
+
+  # Homebrew shells out to git for taps and for anything it fetches, and the
+  # generated `brew` below hands it a PATH of exactly this plus the system
+  # directories. nix-homebrew's list, and its note: coreutils is deliberately
+  # not on it, because the GNU implementations behave differently from the
+  # macOS ones Homebrew is written against.
+  brewRuntimePath = lib.makeBinPath [ pkgs.gitMinimal ];
+
+  # Homebrew's Ruby. Homebrew 6 requires Ruby 4.0 and would otherwise download a
+  # "portable Ruby" of its own into the prefix at first run - a binary from the
+  # network, outside the lock, which is exactly what pinning it here avoids.
+  brewRuby = pkgs.ruby_4_0;
+
+  # The patched copy of Homebrew, ported from nix-homebrew's `patchBrew`.
+  #
+  # Three changes, and each one exists to cut a link between the code in the
+  # store and something outside it:
+  #
+  #   - `brew update` no longer walks HOMEBREW_REPOSITORY. That loop is
+  #     Homebrew updating itself, and the copy here is read-only and pinned;
+  #   - `setup-ruby-path` is replaced so Homebrew uses the nixpkgs Ruby instead
+  #     of downloading a portable one. Homebrew runs Ruby with gems disabled and
+  #     inserts its vendored libraries into LOAD_PATH, so the way to satisfy the
+  #     one gem that is then missing is to add it to LOAD_PATH too, which is
+  #     what the line appended to bundler's setup.rb does;
+  #   - the version is embedded, so `brew --version` and Homebrew's user agent
+  #     do not have to ask a git repository that is not there.
+  #
+  # That last one departs from nix-homebrew's spelling, deliberately and
+  # visibly. nix-homebrew rewrites two assignments in brew.sh with sed, and in
+  # Homebrew 6.0.22 neither of those lines exists any more - the version is
+  # worked out by `set-homebrew-version-from-git` in utils/git.sh. A sed that
+  # matches nothing does nothing and says nothing, which is the worst outcome
+  # available, so the function is overridden instead, the same way this file
+  # overrides `setup-ruby-path`. Both overrides assert that the thing they are
+  # replacing is really there, so a future Homebrew that renames either one
+  # fails this build rather than silently losing the patch.
+  patchedBrew = pkgs.runCommandLocal "brew-${brewVersion}-patched" { } ''
+    cp -r "${brew-src}" "$out"
+    chmod u+w "$out" "$out/Library/Homebrew" "$out/Library/Homebrew/cmd"
+
+    # Disable self-update behavior
+    substituteInPlace "$out/Library/Homebrew/cmd/update.sh" \
+      --replace-fail 'for DIR in "''${HOMEBREW_REPOSITORY}"' "for DIR in "
+
+    # Disable vendored Ruby
+    #
+    # Homebrew passes --disable=gems,rubyopt ($HOMEBREW_RUBY_DISABLE_OPTIONS)
+    # and inserts vendored libraries into LOAD_PATH (vendor/bundle/bundler/setup.rb,
+    # standalone/init.rb). Instead of re-enabling gems, we add in additional
+    # required gems into LOAD_PATH.
+    ruby_sh="$out/Library/Homebrew/utils/ruby.sh"
+    bundler_setup_rb="$out/Library/Homebrew/vendor/bundle/bundler/setup.rb"
+    grep -q "setup-ruby-path" "$ruby_sh" \
+      || { echo "utils/ruby.sh no longer defines setup-ruby-path" >&2; exit 1; }
+    chmod u+w "$ruby_sh" "$bundler_setup_rb"
+    echo -e "setup-ruby-path() { export HOMEBREW_RUBY_PATH=\"${brewRuby}/bin/ruby\"; }" >>"$ruby_sh"
+    echo -e "$:.unshift \"${brewRuby.gems.fiddle}/${brewRuby.gemPath}/gems/fiddle-${brewRuby.gems.fiddle.version}/lib\"" >>"$bundler_setup_rb"
+
+    # Embed the version instead of deriving it from a git repository that this
+    # layout deliberately does not have.
+    git_sh="$out/Library/Homebrew/utils/git.sh"
+    grep -q "set-homebrew-version-from-git" "$git_sh" \
+      || { echo "utils/git.sh no longer defines set-homebrew-version-from-git" >&2; exit 1; }
+    chmod u+w "$git_sh"
+    echo "set-homebrew-version-from-git() { HOMEBREW_VERSION=\"${brewVersion}\"; }" >>"$git_sh"
+  '';
+
+  # The generated `bin/brew`, ported from nix-homebrew's `makeBinBrew`.
+  #
+  # Upstream's own `bin/brew` is a header that works out where Homebrew is,
+  # followed by ~200 lines that set up its environment and exec `brew.sh`. This
+  # replaces the header - no prefix, library or repository auto-detection,
+  # everything decided here - and keeps the tail exactly as the pinned source
+  # writes it.
+  #
+  # The tail is sliced out of `brew-src` at build time rather than vendored.
+  # nix-homebrew keeps a copy of those lines in its tree plus a script to
+  # refresh it; taking the slice here means there is no copy in this repository
+  # to fall out of date with the pin. It is the same slice that script makes:
+  # everything after the last line upstream's header writes, with the runtime
+  # PATH prepended to the single PATH assignment in it.
+  #
+  # Every assumption the slice rests on is asserted, so a future Homebrew that
+  # reshapes bin/brew fails this build instead of producing a launcher that is
+  # quietly truncated or missing git.
+  #
+  # Three things about the result are load bearing:
+  #
+  #   - the `#!/bin/bash` shebang is left exactly as written. nix-homebrew's
+  #     reason: patching it breaks `arch -x86_64 /usr/local/bin/brew` on Apple
+  #     silicon. `runCommandLocal` runs no fixup phase, so nothing here rewrites
+  #     it, and tests/homebrew.test.sh reads the first line back to be sure;
+  #   - HOMEBREW_REPOSITORY points at a directory that is not a git repository
+  #     and says so in its name. Homebrew expects a repository to exist; it does
+  #     not need one that works, because nothing here ever updates itself;
+  #   - HOMEBREW_NO_AUTO_UPDATE is deliberately absent, in either direction.
+  #     nix-homebrew sets it when it pins the taps; no taps are pinned here, so
+  #     there is nothing to protect - and this repository's standing rule is
+  #     that it never touches that variable, because a slow or proxied network
+  #     is exactly why someone would set it themselves. Auto-update has nothing
+  #     to fast-forward in a read-only store copy in any case.
+  #
+  # No taps are declared, so Homebrew uses its JSON API, as it does by default.
+  # Pinning homebrew-core and homebrew-cask would drag two very large
+  # repositories into flake.lock to buy a reproducibility this configuration
+  # does not claim anyway: the Brewfile names formulae, and Homebrew picks the
+  # versions.
+  binBrew = pkgs.runCommandLocal "brew" {
+    # Passed through the environment, so `printf '%s'` writes it out verbatim
+    # and the `$HOMEBREW_LIBRARY` below stays a reference Homebrew expands at
+    # run time rather than something this build expands.
+    header = ''
+      #!/bin/bash
+      export HOMEBREW_PREFIX="${homebrewPrefix}"
+      export HOMEBREW_LIBRARY="${homebrewLibrary}"
+      export HOMEBREW_REPOSITORY="$HOMEBREW_LIBRARY/.homebrew-is-managed-by-nix"
+      export HOMEBREW_BREW_FILE="@out@"
+
+      # Homebrew itself cannot self-update, so we set
+      # fake before/after versions to make `update-report.rb` happy
+      export HOMEBREW_UPDATE_BEFORE="nix"
+      export HOMEBREW_UPDATE_AFTER="nix"
+    '';
+  } ''
+    src="${brew-src}/bin/brew"
+
+    grep -c '^HOMEBREW_LIBRARY=' "$src" | grep -qx 1 \
+      || { echo "bin/brew no longer has exactly one HOMEBREW_LIBRARY= line" >&2; exit 1; }
+    grep -c '^PATH="' "$src" | grep -qx 1 \
+      || { echo "bin/brew no longer has exactly one PATH= line" >&2; exit 1; }
+
+    {
+      printf '%s' "$header" | sed -e "s|@out@|$out|"
+      sed \
+        -e '1,/^HOMEBREW_LIBRARY=/d' \
+        -e 's|^PATH="|PATH="${brewRuntimePath}:|' \
+        "$src"
+    } >"$out"
+
+    grep -q 'exec /usr/bin/env -i' "$out" \
+      || { echo "the sliced bin/brew tail does not end in Homebrew's exec" >&2; exit 1; }
+    grep -q "^PATH=\"${brewRuntimePath}:" "$out" \
+      || { echo "the runtime PATH was not prepended, so Homebrew would have no git" >&2; exit 1; }
+    head -n1 "$out" | grep -qx '#!/bin/bash' \
+      || { echo "the generated brew does not start with #!/bin/bash" >&2; exit 1; }
+
+    chmod +x "$out"
+  '';
+
+  # The unprivileged half of the setup, which runs on every switch.
+  #
+  # It writes three things into a prefix bootstrap.sh has already created and
+  # handed to this user: the symlink that makes $HOMEBREW_LIBRARY/Homebrew the
+  # patched store copy, the empty directory Homebrew expects to find a
+  # repository at, and the symlink that makes $HOMEBREW_PREFIX/bin/brew the
+  # launcher above. None of it needs root, and if the prefix is not in a state
+  # where that is true it fails and says to run ./bootstrap.sh.
+  #
+  # The rules it applies are lib/homebrew-present.sh's, sourced out of the Nix
+  # store rather than reimplemented here, so bootstrap.sh's preflight and this
+  # step cannot reach different verdicts about the same prefix.
+  #
+  # The two store paths are named on their own lines rather than inlined into
+  # the call, because tests/safety.test.sh reads them back out of the built
+  # artifact to decide what it has to scan.
+  homebrewPrefixSetup = pkgs.writeShellScript "dotfiles-work-homebrew-prefix" ''
+    set -eu
+
+    . ${./lib/homebrew-present.sh}
+
+    brew_code="${patchedBrew}/Library/Homebrew"
+    bin_brew="${binBrew}"
+
+    dotfiles_homebrew_prefix_link \
+      "${homebrewPrefix}" "${homebrewLibrary}" "$brew_code" "$bin_brew"
+  '';
 
   # === Homebrew ==============================================================
   #
@@ -53,78 +271,64 @@ let
     ${lib.concatMapStringsSep "\n" (c: ''cask "${c}"'') casks}
   '';
 
-  # The Homebrew step, as a script rather than inline activation text, so that
-  # its behaviour can be executed and asserted on directly - a missing `brew`
-  # in particular. tests/homebrew.test.sh runs this very file.
+  # The Brewfile step, as a script rather than inline activation text, so that
+  # its behaviour can be executed and asserted on directly - what it passes
+  # `brew`, what it does with the cleanup variables, and a missing `brew`.
+  # tests/homebrew.test.sh runs this very file against a recording stand-in.
   brewBundle = pkgs.writeShellScript "dotfiles-work-brew-bundle" ''
     set -eu
 
     brewfile="$HOME/${brewfileTarget}"
 
-    # Homebrew belongs to the user, not to this repository. It is installed by
-    # hand, and nothing here installs it, upgrades its own installation or
-    # removes it - this script only asks an existing Homebrew to install what
-    # the Brewfile lists. The two candidate prefixes below are the only literal
-    # Homebrew paths in this file, deliberately: tests/safety.test.sh asserts
-    # that the built artifact contains those two and nothing else, and a prefix
-    # written out in prose would be indistinguishable from one being used.
+    # Where to find the `brew` this step hands the Brewfile to.
+    #
+    # The same library the prefix-setup step sources, and for the same reason:
+    # this search used to be written out here as well, and the two copies drifting
+    # is not hypothetical - one of them fed a space-separated string to an
+    # unquoted `for`, so a HOMEBREW_PREFIX containing a space split into two
+    # paths that do not exist, and bootstrap refused a Mac the rebuild would
+    # have accepted. There is one copy now.
+    #
+    # It is a different question from the one the prefix-setup step answers, and
+    # it stays a different question. Setup decides where this configuration's
+    # Homebrew BELONGS - architecture, and nothing else. This decides where to
+    # LOOK, and it honours HOMEBREW_PREFIX, which is Homebrew's own answer to
+    # "where am I": a machine that has been told where Homebrew is and does not
+    # have it there is a machine without a usable Homebrew, and saying so is
+    # better than quietly using a different one. On an ordinary machine the two
+    # answers coincide, and tests/homebrew.test.sh asserts that they do.
     #
     # PATH is not consulted, because it cannot be: Home Manager's activation
     # script replaces PATH with a fixed list of Nix store paths before running
-    # this, so the user's shell PATH is not visible here at all. What is
-    # visible is the rest of their environment, and HOMEBREW_PREFIX is
-    # Homebrew's own answer to "where am I" - every shell set up by
-    # `brew shellenv` exports it. So it is taken as authoritative when it is
-    # set, including when there is no brew inside it: a machine that has been
-    # told where Homebrew is and does not have it there is a machine without a
-    # usable Homebrew, and saying so is better than quietly using a different
-    # one. Otherwise the two prefixes macOS Homebrew supports are tried, Apple
-    # silicon first.
+    # this, so the user's shell PATH is not visible here at all. What is visible
+    # is the rest of their environment, which is where HOMEBREW_PREFIX comes
+    # from - every shell set up by `brew shellenv` exports it.
     #
-    # bootstrap.sh answers the same question before anything is installed, in
-    # lib/homebrew-present.sh, so this rule exists twice. The two must agree -
-    # a preflight that accepts a Mac this step then refuses is the failure it
-    # exists to prevent - and tests/homebrew.test.sh runs both against the same
-    # prefixes and fails if their verdicts differ.
-    #
-    # That first branch is also the only lever that makes the missing-Homebrew
-    # failure path above reachable in a test on a machine that *has* Homebrew,
-    # which is every CI runner - macos-latest ships it preinstalled.
+    # That branch is also the only lever that makes the missing-Homebrew failure
+    # path below reachable in a test on a machine that *has* Homebrew, which is
+    # every CI runner - macos-latest ships it preinstalled.
     # tests/homebrew.test.sh:test_a_missing_homebrew_fails_with_an_explanation
     # points HOMEBREW_PREFIX at an empty directory for exactly that purpose. It
     # has been proposed as a redundant second acceptance path and kept
     # deliberately: dropping it would trade a working guarantee for a tidier
     # line.
-    brew=""
-    if [ -n "''${HOMEBREW_PREFIX:-}" ]; then
-      # Quoted, not word-split: this one comes from the environment.
-      searched="$HOMEBREW_PREFIX/bin/brew"
-      if [ -x "$searched" ]; then
-        brew="$searched"
-      fi
-    else
-      searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
-      for candidate in $searched; do
-        if [ -x "$candidate" ]; then
-          brew="$candidate"
-          break
-        fi
-      done
-    fi
+    . ${./lib/homebrew-present.sh}
+
+    brew=$(dotfiles_homebrew_find)
 
     if [ -z "$brew" ]; then
-      echo "dotfiles-work: no Homebrew at $searched, so its part of this" >&2
+      echo "dotfiles-work: no Homebrew at $(dotfiles_homebrew_searched), so its part of this" >&2
       cat >&2 <<'MISSING'
     configuration cannot be applied.
 
-    This configuration drives Homebrew; it deliberately does not install it.
-    Homebrew's installer needs your password and writes outside your home
-    directory, so running it is your decision to make, not this repository's -
-    and on a Mac you do not administer it may not be yours to make at all.
+    This configuration installs its own Homebrew, from the version flake.lock
+    pins, into the prefix ./bootstrap.sh creates. Reaching this message means
+    that prefix is not where this step looked - either ./bootstrap.sh has never
+    run on this Mac, or HOMEBREW_PREFIX is pointing somewhere else.
 
-    Install it yourself from https://brew.sh and run ./rebuild.sh again. This
-    configuration requires it: emptying the `brews` and `casks` lists in
-    home.nix does not turn this step off, it only leaves it with nothing to
+    Run ./bootstrap.sh, which says what it finds and what it will do about it.
+    There is no way to opt out of this step: emptying the `brews` and `casks`
+    lists in home.nix does not turn it off, it only leaves it with nothing to
     install.
     MISSING
       exit 1
@@ -254,11 +458,12 @@ in
   # `homebrewBundle` sorts first, so without that edge the step reads the
   # previous generation's Brewfile - or none at all on a first switch.
   #
-  # The other two edges are there because this step can fail on a machine that
-  # has no Homebrew, activation runs under `set -eu`, and a failure here must
-  # not take anything else down with it. `installPackages` is what makes true
-  # the promise README.md, HOW-TO.md and bootstrap.sh all make, that when
-  # Homebrew is missing everything Nix installs has already been applied.
+  # The other two edges are there because these steps can fail on a machine
+  # whose Homebrew prefix is missing or not the user's, activation runs under
+  # `set -eu`, and a failure here must not take anything else down with it.
+  # `installPackages` is what makes true the promise README.md, HOW-TO.md and
+  # bootstrap.sh all make, that when the Homebrew half fails everything Nix
+  # installs has already been applied.
   # `onFilesChange` is the one that would not self-heal: it holds the font
   # rsync into ~/Library/Fonts, guarded by a marker file that `linkGeneration`
   # has already placed in $HOME by the time this runs. Fail in between and the
@@ -266,18 +471,33 @@ in
   # the rsync forever - so the font is never installed and the prompt renders
   # tofu until the font derivation itself changes.
   #
-  # This is where this repository stops being contained by the home directory.
-  # Homebrew installs into /opt/homebrew and casks into /Applications, and this
-  # step asks it to. README.md says so in the same words; AGENTS.md records what
-  # the design rule now is, and tests/safety.test.sh asserts the part of it that
-  # still holds.
+  # This and the prefix step above are where this repository stops being
+  # contained by the home directory. The prefix step writes into /opt/homebrew
+  # or /usr/local - into a directory bootstrap.sh has already made the user's,
+  # so still without root - and this step asks Homebrew to install into that
+  # prefix and into /Applications. README.md says so in the same words;
+  # AGENTS.md records what the design rule now is, and tests/safety.test.sh
+  # asserts the part of it that still holds.
   home.file."${brewfileTarget}".text = brewfile;
 
-  # Unconditional. This configuration requires Homebrew, and emptying the lists
-  # above is not a way to opt out of it: the step still runs, still needs a
-  # `brew` to talk to, and asks it to install nothing.
-  home.activation.homebrewBundle =
+  # Unconditional, both of them. This configuration installs and requires
+  # Homebrew, and emptying the lists above is not a way to opt out: the prefix
+  # is still set up, the Brewfile step still runs, and it asks Homebrew to
+  # install nothing.
+  #
+  # Two steps, and the edge between them is the load-bearing part. The prefix
+  # setup is what puts a `brew` at $HOMEBREW_PREFIX/bin/brew, so it has to run
+  # before the step that looks for one. Home Manager breaks an unconstrained tie
+  # by attribute name and "homebrewBundle" sorts ahead of "homebrewPrefix", so
+  # without the explicit edge the order would be exactly backwards - and on a
+  # first switch the bundle step would report a missing Homebrew that the very
+  # next step was about to install.
+  home.activation.homebrewPrefix =
     lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" ]
+      "run ${homebrewPrefixSetup}";
+
+  home.activation.homebrewBundle =
+    lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" "homebrewPrefix" ]
       "run ${brewBundle}";
 
   home.sessionVariables.EDITOR = "nvim";

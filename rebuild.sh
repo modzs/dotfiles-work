@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Apply this configuration to your home directory.
 #
-# Nothing here runs sudo or asks you for a password. What this writes is your
-# home directory, plus - through a Homebrew you installed yourself - the
-# formulae and casks home.nix lists. It uninstalls neither.
+# Nothing here runs sudo or asks you for a password, and that stays true even
+# though this configuration now installs Homebrew: the one privileged step is in
+# ./bootstrap.sh, it runs once, and what it leaves behind is a prefix your
+# account owns. What this writes is your home directory, the symlinks that point
+# that prefix at the Homebrew in the Nix store, and - through that Homebrew - the
+# formulae and casks home.nix lists. It uninstalls none of them.
 #
 # One qualification, because an unqualified promise here would be false: when a
 # cask on that list replaces an application you do not own - one an employer's

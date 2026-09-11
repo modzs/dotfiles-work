@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Behaviour tests for the interactive steps in bootstrap.sh, which live in
-# lib/personalize.sh so they can be driven by a script instead of a person.
+# Behaviour tests for bootstrap.sh.
 #
-# The property under test is the one the repository this replaces got wrong:
+# Almost everything here is about the interactive steps, which live in
+# lib/personalize.sh so they can be driven by a script instead of a person. The
+# last check is about the script's SHAPE instead, and says so where it sits:
+# bootstrap.sh is the one file in this repository that cannot be run end to end
+# by a test, because running it installs Nix and asks for a password twice.
+#
+# The property under test in the interactive checks is the one the repository
+# this replaces got wrong:
 #
 #   Wherever a default is offered, the default is THIS MACHINE'S CURRENT VALUE,
 #   never the value already written in the config.
@@ -30,7 +36,57 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 10
+dotfiles_test_expect 11
+
+# --- the one privileged step, and where it sits -------------------------------
+
+test_the_privileged_step_runs_after_every_check_and_before_the_switch() {
+  local sudo_line
+
+  # bootstrap.sh creates Homebrew's prefix under the single `sudo` in this
+  # repository. Two rules govern where that line may go, and neither is visible
+  # from any single step:
+  #
+  #   - everything that can refuse the run must already have refused. The prefix
+  #     is outside the home directory, so creating it for a run that then stops
+  #     on a wrong account or a wrong home directory would leave a machine
+  #     changed by a bootstrap that did not finish. AGENTS.md states the rule as
+  #     "a script refuses before it writes";
+  #   - it must come before the switch, because the activation step that links
+  #     Homebrew into that prefix has no way to create it and fails without it.
+  #
+  # Asserted against the source, which is unusual in this suite and deliberate
+  # here. The rest of these checks run the code; this one cannot, because the
+  # lines between the two markers install Nix. What is being asserted is a fact
+  # about what this script CONTAINS and in what order - the same kind of claim
+  # tests/safety.test.sh makes about `sudo` appearing at all - not prose used as
+  # a proxy for behaviour.
+  # A function, not a `local`: bash 3.2 has no local functions, and declaring
+  # the name as a variable too is what shellcheck reads as a dead assignment.
+  line_of() {
+    grep -n -F -- "$1" "$ROOT/bootstrap.sh" | head -n1 | cut -d: -f1
+  }
+
+  sudo_line=$(line_of 'lib/homebrew-initialize-prefix.sh')
+  [ -n "$sudo_line" ] \
+    || fail "bootstrap.sh never runs the script that creates Homebrew's prefix"
+
+  # The preflight, which is what makes a refusal cost nothing: it looks at the
+  # prefix before Nix is installed and before any password is asked for.
+  [ "$(line_of 'dotfiles_homebrew_preflight')" -lt "$(line_of 'install.determinate.systems')" ] \
+    || fail "the Homebrew preflight runs after the Nix installer, so a Mac it would refuse pays for a Nix install first"
+
+  [ "$(line_of 'install.determinate.systems')" -lt "$sudo_line" ] \
+    || fail "the prefix is created before Nix is installed, which is not the documented order"
+
+  [ "$(line_of 'flake_settings_check_machine')" -lt "$sudo_line" ] \
+    || fail "the prefix is created before the account and home directory are checked, so a run that then refuses would still have written outside \$HOME"
+
+  [ "$sudo_line" -lt "$(line_of 'switch -b backup')" ] \
+    || fail "the prefix is created after the switch, so the first activation would have nowhere to install Homebrew"
+
+  pass "bootstrap: the one privileged step runs after every check and before the switch"
+}
 
 write_fixture() {
   local path=$1 user=$2 home=$3
@@ -240,5 +296,7 @@ test_a_matching_home_directory_asks_nothing
 test_seeding_creates_the_local_file
 test_seeding_never_touches_an_existing_local_file
 test_bootstrap_never_prompts_for_a_machine_name
+
+test_the_privileged_step_runs_after_every_check_and_before_the_switch
 
 test_summary
