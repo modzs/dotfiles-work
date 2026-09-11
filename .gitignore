@@ -16,6 +16,9 @@ gitconfig.work
 .DS_Store
 result
 result-*
+
+# A temp file beside flake.nix, left only by an interrupted settings write.
+# See lib/flake-settings.sh.
 .flake-settings.*
 
 # no-mistakes local validation state - never commit in this public repo
