@@ -44,6 +44,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$DIR/lib/install-report.sh"
 # shellcheck source=lib/homebrew-present.sh
 . "$DIR/lib/homebrew-present.sh"
+# shellcheck source=lib/nix-present.sh
+. "$DIR/lib/nix-present.sh"
 
 # Every step below resolves through ~/.dotfiles, so settle that path before
 # anything is installed and before sudo is asked for. Refusing here costs the
@@ -94,6 +96,13 @@ else
     set -u
   fi
 fi
+
+# The other thing step 1 has to have produced, and the last refusal this run can
+# make. It is asked HERE - before step 2 repoints ~/.dotfiles and, far more
+# importantly, before step 5 spends the password - because a Mac whose switch
+# cannot run has to be turned away before either. Step 7 uses $NIX_BIN and tests
+# nothing again; lib/nix-present.sh says why there is exactly one of these.
+NIX_BIN="$(dotfiles_nix_path)"
 
 echo "==> Step 2: symlink this repo to ~/.dotfiles"
 dotfiles_link_apply "$DIR"
@@ -231,14 +240,8 @@ CONFIG_NAME="$(flake_settings_config_name "$DIR/flake.nix")"
 # configured, and this is the only place the user gets to see which of the two
 # configurations is about to be built.
 echo "    This Mac is $(uname -m), so the configuration is \"$CONFIG_NAME\"."
-NIX_BIN="$(command -v nix || true)"
-if [ -z "$NIX_BIN" ]; then
-  echo "    nix is not on this shell's PATH, so the switch cannot run."
-  echo "    The Determinate installer only adds nix to the PATH of new shells,"
-  echo "    so a terminal opened before step 1 installed it will not have it."
-  echo "    Open a new terminal and re-run ./bootstrap.sh."
-  exit 1
-fi
+# $NIX_BIN was resolved and verified right after step 1, which is what lets this
+# run without a second guard: a refusal here would come after the password.
 "$NIX_BIN" run "$HOME/.dotfiles#home-manager" -- \
   switch -b backup --flake "$HOME/.dotfiles#$CONFIG_NAME"
 

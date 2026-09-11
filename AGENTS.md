@@ -282,10 +282,15 @@ documents that seam.
 - **A script refuses before it writes, and ends on the truth.** `rebuild.sh`
   checks everything that can refuse - the account and home directory, `nix` on
   PATH, `~/.dotfiles` - before anything is repointed or built. `bootstrap.sh`
-  runs in a different order on purpose: it repoints `~/.dotfiles` at step 2 and
-  only checks the account and home directory afterwards, with the nix-on-PATH
-  guard later still, because the interactive personalize steps in between are
-  what make that check pass. Neither may end a failed run on friendly advice.
+  runs in a different order on purpose: it settles `~/.dotfiles` and Homebrew's
+  prefix in a preflight, asks `lib/nix-present.sh` for `nix` the moment step 1
+  could have installed one, and only then repoints `~/.dotfiles` at step 2 and
+  checks the account and home directory - because the interactive personalize
+  steps in between are what make those two checks pass. That library is the
+  **one** owner of the missing-`nix` refusal and it must stay ahead of step 5:
+  a second copy of it further down would let a Mac whose switch can never run
+  spend the password first. `tests/bootstrap.test.sh` drives the refusal with a
+  `nix`-free PATH. Neither script may end a failed run on friendly advice.
   `rebuild.sh` once printed
   seven reassuring lines about git identity underneath `nix: command not
   found`, so a run that installed nothing read like a run that worked, and it
