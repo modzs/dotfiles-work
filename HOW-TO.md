@@ -492,3 +492,29 @@ architecture; see "Add or remove a tool" above.
 **The terminal apps are not in Spotlight** - they should be; they are Homebrew
 casks in `/Applications` now. If they are not, check that the cask actually
 installed: `brew list --cask`.
+
+**`unable to get local issuer certificate` while a plugin builds** - the first
+`nvim` launch after `markdown-preview.nvim` was added runs lazy.nvim's build
+step for it, `cd app && npx --yes yarn@1.22.22 install`. On a network that
+intercepts TLS, Node does not trust the interceptor's certificate and that
+download fails:
+
+```
+[markdown-preview.nvim] build | npm error code UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+[markdown-preview.nvim] build | npm error errno UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+[markdown-preview.nvim] build | npm error request to https://registry.npmjs.org/yarn failed, reason: unable to get local issuer certificate
+```
+
+The plugin itself is installed; only its preview server is missing, so
+`:MarkdownPreview` will not open. `render-markdown.nvim` has no build step and
+is unaffected - markdown still renders in the buffer.
+
+Point Node at your network's CA with `NODE_EXTRA_CA_CERTS`, or npm at an
+internal registry, from `~/.zshrc.local`; [README.md](README.md#the-untracked-local-files)
+shows both. Those values are specific to your employer's network and belong in
+that untracked file, never in this repository. Then rebuild the plugin - this
+does not reinstall it, and does not touch `lazy-lock.json`:
+
+```vim
+:Lazy build markdown-preview.nvim
+```
