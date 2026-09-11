@@ -180,8 +180,8 @@ install_report_homebrew_path_note() {
   printf '%sREADME.md is exact about what those steps do and do not do.\n' "$indent"
   printf '\n'
   printf '%sWhether a new terminal can find brew was not checked: this run\n' "$indent"
-  printf '%sprobed ~/.nix-profile/bin and nothing else, and nothing here reads\n' "$indent"
-  printf '%sthe environment Homebrew sets. Nothing here writes a PATH line for\n' "$indent"
+  printf '%sonly looks at ~/.nix-profile/bin, and nothing here reads the\n' "$indent"
+  printf '%senvironment Homebrew sets. Nothing here writes a PATH line for\n' "$indent"
   printf '%sHomebrew either, and the prefix was set up by a script, so nothing\n' "$indent"
   printf '%shas ever printed you one. If a new terminal cannot find the names\n' "$indent"
   printf '%son the Homebrew list, add to ~/.zprofile:\n' "$indent"
