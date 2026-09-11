@@ -189,7 +189,10 @@ the check would notice.
 a recording stand-in for `brew` and fails if it passes anything that could
 uninstall or upgrade, if it lets either Homebrew cleanup variable through from
 the environment, if a missing Homebrew produces a raw error rather than an
-explanation, or if a tool ends up installed by both Nix and Homebrew. It runs the
+explanation, if it hands the Brewfile to a `brew` outside the prefix it was given
+(that one asserts the stand-ins recorded no call at all, because a refusal that
+had already exec'd `brew` would be a message rather than a guard), or if a tool
+ends up installed by both Nix and Homebrew. It runs the
 prefix steps against a stand-in prefix in a temp directory - created, marked,
 re-run, linked, re-linked - and fails if an existing Homebrew is touched, if a
 second run rewrites the marker, if the unprivileged step needs root, or if it
@@ -224,27 +227,40 @@ two paths that do not exist - so do not reintroduce a second copy. Read both
 files before changing the structure of the configuration; they explain what each
 check asserts and why a grep would not do.
 
-The two questions are reconciled in exactly one place: **`dotfiles_homebrew_preflight`
-asks the second question before it asks the first**, and refuses when the two
-disagree. An Apple silicon Mac carrying an Intel Homebrew at `/usr/local` with
-that Homebrew's `shellenv` line in its profile has a Homebrew; a preflight that
-inspected only the architecture prefix said "no Homebrew in it", spent the
-password on a prefix nothing then used, and let the Brewfile step install every
-formula and cask into the other one without an error anywhere. The guard is
-`dotfiles_homebrew_find` compared against the managed prefix's own `bin/brew` -
-asking the search rather than reimplementing it, so it refuses exactly when the
-Brewfile step would have gone elsewhere.
+The two questions are reconciled by **two guards, and both are required**. Each
+asks `dotfiles_homebrew_is_managed_brew` - one function, so they cannot disagree
+about what "ours" means - and each refuses rather than warning:
 
-**That guard is deliberately at bootstrap only, and a second one must not be
-added to the Brewfile step.** The owner chose "name what you found and stop" over
-both carrying on with a warning and overriding the user's `HOMEBREW_PREFIX`, and
-the reason it belongs here is that here it costs nothing: nothing is installed,
-no password has been asked for, and choosing between two Homebrews is the user's
-decision. The residual is known and accepted rather than overlooked - a
-`shellenv` line added *after* a successful setup still redirects later rebuilds,
-and HOW-TO.md documents the symptom. Closing that would mean a second definition
-of the same rule in the step that writes, which is the shape every one of these
-rounds has had to undo.
+- **`dotfiles_homebrew_preflight`**, before Nix is installed and before the
+  password. An Apple silicon Mac carrying an Intel Homebrew at `/usr/local` with
+  that Homebrew's `shellenv` line in its profile has a Homebrew; a preflight that
+  inspected only the architecture prefix said "no Homebrew in it", spent the
+  password on a prefix nothing then used, and let the Brewfile step install every
+  formula and cask into the other one without an error anywhere.
+- **the Brewfile step**, on every switch. A preflight only runs when someone runs
+  it, and a `shellenv` line added *after* a successful setup redirects every
+  later rebuild. **The repository owner asked for this one explicitly, after
+  being shown the cost - do not remove it as redundant with the preflight.** It
+  is what makes the promise "nothing installs into a Homebrew this configuration
+  does not manage" true at the moment of installing rather than at setup.
+
+The Brewfile step is **given** the prefix it manages as its only argument rather
+than working it out, and that is what keeps it testable: the stand-in tests point
+both it and `HOMEBREW_PREFIX` at one temp directory, so the invariant under test
+is "these two agree" rather than one hardcoded path. `home.nix` passes the same
+value the prefix-setup step gets.
+
+What the preflight refuses is **deliberately a superset** of "the Brewfile step
+would have gone elsewhere", and the code comment says so rather than claiming an
+equivalence it does not have. `dotfiles_homebrew_find`'s fallback is ordered and
+the managed launcher does not exist yet at preflight time, so on Apple silicon
+with `HOMEBREW_PREFIX` unset, an Intel Homebrew at `/usr/local` and no
+`/opt/homebrew`, the preflight refuses a machine whose Brewfile step would have
+found `/opt/homebrew/bin/brew` first and been right. On Intel the asymmetry runs
+the other way and the guard is load-bearing: the managed prefix is `/usr/local`,
+so a foreign `/opt/homebrew` wins the fallback even after setup. The superset is
+the point - two Homebrews on one Mac leave the user's own PATH reaching the one
+this repository did not fill, and the owner asked to be told and stopped.
 
 This is also why the preflight checks in `tests/homebrew.test.sh` set
 `HOMEBREW_PREFIX` explicitly rather than inheriting it: the preflight now reads

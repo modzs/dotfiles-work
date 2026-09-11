@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 26
+dotfiles_test_expect 27
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -193,7 +193,7 @@ STANDIN
     PATH=/usr/bin:/bin \
     HOMEBREW_PREFIX="$root/prefix" \
     "$@" \
-    "$script" 2>&1 || status=$?
+    "$script" "$root/prefix" 2>&1 || status=$?
 
   [ "$status" = 0 ] || fail "the Homebrew step failed against a stand-in brew (exit $status)"
 }
@@ -1077,7 +1077,7 @@ dotfiles_step_verdict() {
     HOME="$root/home" \
     PATH=/usr/bin:/bin \
     HOMEBREW_PREFIX="$prefix" \
-    "$script" >/dev/null 2>&1 || status=$?
+    "$script" "$prefix" >/dev/null 2>&1 || status=$?
 
   if [ "$status" = 0 ]; then printf 'found\n'; else printf 'absent\n'; fi
 }
@@ -1174,7 +1174,7 @@ test_a_missing_homebrew_fails_with_an_explanation() {
     HOME="$root/home" \
     PATH=/usr/bin:/bin \
     HOMEBREW_PREFIX="$root/empty" \
-    "$script" 2>&1) || status=$?
+    "$script" "$root/empty" 2>&1) || status=$?
 
   [ "$status" != 0 ] \
     || fail "the Homebrew step succeeded on a machine with no Homebrew"
@@ -1198,6 +1198,75 @@ test_a_missing_homebrew_fails_with_an_explanation() {
     "the step let the shell report a missing command instead of explaining"
 
   pass "homebrew: a Mac without Homebrew gets an explanation and a non-zero exit"
+}
+
+# --- the Brewfile never goes to a Homebrew this configuration does not manage -
+
+test_the_homebrew_step_refuses_a_brew_outside_the_managed_prefix() {
+  local root generation script output status=0
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "unmanaged Homebrew check (nix not found)"
+    return 0
+  fi
+
+  # The second door. bootstrap.sh's preflight refuses a Mac whose Homebrew is
+  # somewhere else, but a preflight only runs when someone runs it: a user who
+  # adds Homebrew's shellenv line, or a second Homebrew, AFTER a successful
+  # setup points HOMEBREW_PREFIX at it, and every later rebuild would hand the
+  # whole Brewfile to a Homebrew this configuration does not manage - formulae
+  # and casks into someone else's prefix, `--force` replacing apps there, and
+  # the prefix the one password paid for left empty. Silently, exit 0.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  script=$(dotfiles_brew_bundle_script "$generation") \
+    || fail "the activation script does not run a Homebrew step at all"
+
+  root=$(dotfiles_test_tmproot dotfiles-unmanaged)
+  mkdir -p "$root/home/$(dirname "$BREWFILE_TARGET")" "$root/managed/bin" "$root/foreign/bin"
+  cp "$generation/home-files/$BREWFILE_TARGET" "$root/home/$BREWFILE_TARGET"
+
+  # Both prefixes hold a usable brew, which is what makes this the right
+  # scenario rather than the missing-Homebrew one: the step can reach a
+  # Homebrew, and still must not use this one. Each records any call, so
+  # "installed nothing" is asserted from the absence of a recording rather than
+  # from the exit status.
+  local standin
+  for standin in managed foreign; do
+    cat >"$root/$standin/bin/brew" <<STANDIN
+#!/bin/sh
+printf 'called: %s\n' "\$*" >>"$root/$standin.calls"
+STANDIN
+    chmod +x "$root/$standin/bin/brew"
+  done
+
+  output=$(env -i \
+    HOME="$root/home" \
+    PATH=/usr/bin:/bin \
+    HOMEBREW_PREFIX="$root/foreign" \
+    "$script" "$root/managed" 2>&1) || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the Homebrew step handed the Brewfile to a Homebrew outside the prefix it manages"
+
+  # Nothing ran. This is the assertion the door exists for - a refusal that had
+  # already exec'd brew would be a message, not a guard.
+  [ ! -e "$root/foreign.calls" ] \
+    || fail "the step invoked the unmanaged Homebrew: $(cat "$root/foreign.calls")"
+  [ ! -e "$root/managed.calls" ] \
+    || fail "the step invoked Homebrew at all after refusing"
+
+  # Both paths named, because "it refused" is not actionable on a Mac with two
+  # Homebrews unless the user is told which is which.
+  assert_contains "$output" "$root/foreign/bin/brew" \
+    "the refusal does not name the Homebrew it found"
+  assert_contains "$output" "$root/managed" \
+    "the refusal does not name the prefix this configuration manages"
+  assert_contains "$output" "dotfiles-work" \
+    "the failure does not say which configuration it came from"
+  assert_not_contains "$output" "command not found" \
+    "the step let the shell report a missing command instead of explaining"
+
+  pass "homebrew: the step refuses a brew outside the prefix it manages, and installs nothing"
 }
 
 # --- the two answers to "which prefix" agree ----------------------------------
@@ -1488,6 +1557,7 @@ test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do
 test_the_preflight_refuses_a_homebrew_outside_the_managed_prefix
 test_the_preflight_and_the_step_agree_on_where_brew_is
 test_a_missing_homebrew_fails_with_an_explanation
+test_the_homebrew_step_refuses_a_brew_outside_the_managed_prefix
 test_the_prefix_the_setup_step_manages_is_this_architectures
 test_the_generated_brew_is_pinned_to_this_prefix
 test_no_tool_is_installed_by_both_nix_and_homebrew

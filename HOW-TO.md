@@ -454,15 +454,23 @@ run. Run `./bootstrap.sh`. If the prefix *is* set up, check `HOMEBREW_PREFIX`:
 this step trusts that variable when the environment sets it, and a stale value
 points it at the wrong place.
 
-**Formulae and casks land under a Homebrew prefix this repo did not set up** -
-a known behaviour, not a bug you have hit by accident. The Brewfile step asks
-`HOMEBREW_PREFIX` first, because that is Homebrew's own answer to "where am I".
-`./bootstrap.sh` checks that the answer is the prefix it manages and refuses if
-it is not - but it checks *at bootstrap*. If you add another Homebrew, or add a
-`brew shellenv` line pointing at one, **after** a successful setup, later
-rebuilds will follow it and install there: `brew list` under the managed prefix
-comes back empty while the packages appear under the other one. Either remove
-that line, or re-run `./bootstrap.sh`, which will name what it finds and stop.
+**`dotfiles-work: refusing to hand the Brewfile to a Homebrew this
+configuration does not manage`** - a rebuild found a `brew`, but not the one in
+the prefix this repo set up, so it stopped without installing anything. The
+message names both: the `brew` it found and the prefix it manages.
+
+The usual cause is a `brew shellenv` line added to your shell profile **after**
+`./bootstrap.sh` ran, pointing `HOMEBREW_PREFIX` at a different Homebrew - that
+variable is what this step trusts. Either remove that line so the managed prefix
+is used again, or, if you would rather keep the other Homebrew, decide which one
+this Mac should have and re-run `./bootstrap.sh`, which names what it finds and
+stops.
+
+This is a refusal, not a warning: nothing is installed into a Homebrew this repo
+does not manage, and `--force` never replaces an app under someone else's
+prefix. `./bootstrap.sh` makes the same check before it asks for your password;
+this one runs on every rebuild, so adding a second Homebrew later cannot
+redirect your packages without telling you.
 
 **A rebuild succeeds but `gh`, `herdr` or `brew` is not found** - they are
 installed, but your shell cannot see Homebrew's `bin` directory. This repo finds

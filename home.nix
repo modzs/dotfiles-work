@@ -278,6 +278,19 @@ let
   brewBundle = pkgs.writeShellScript "dotfiles-work-brew-bundle" ''
     set -eu
 
+    # The prefix this configuration manages, passed in rather than worked out
+    # here. home.nix already knows it - it is the same value the prefix-setup
+    # step was given - and taking it as an argument is what lets the tests point
+    # both this and HOMEBREW_PREFIX at one temp directory and still exercise the
+    # real step. Baking it would make every stand-in run fail the check below
+    # for a reason that has nothing to do with what the test is about.
+    if [ "$#" != 1 ]; then
+      echo "dotfiles-work: this step takes the Homebrew prefix it manages as" >&2
+      echo "       its only argument. Home Manager's activation passes it." >&2
+      exit 2
+    fi
+    managed_prefix=$1
+
     brewfile="$HOME/${brewfileTarget}"
 
     # Where to find the `brew` this step hands the Brewfile to.
@@ -312,6 +325,9 @@ let
     # has been proposed as a redundant second acceptance path and kept
     # deliberately: dropping it would trade a working guarantee for a tidier
     # line.
+    #
+    # What the variable no longer buys is the right to send the Brewfile
+    # anywhere at all - see the refusal below.
     . ${./lib/homebrew-present.sh}
 
     brew=$(dotfiles_homebrew_find)
@@ -331,6 +347,27 @@ let
     lists in home.nix does not turn it off, it only leaves it with nothing to
     install.
     MISSING
+      exit 1
+    fi
+
+    # The second door, and it is shut on every switch rather than once at
+    # bootstrap.
+    #
+    # bootstrap.sh's preflight refuses a Mac whose Homebrew is somewhere else,
+    # but a preflight only runs when someone runs it. A user who adds Homebrew's
+    # shellenv line AFTER a successful setup - or installs a second Homebrew -
+    # points HOMEBREW_PREFIX at it, and every later rebuild would hand the whole
+    # Brewfile to a Homebrew this configuration does not manage: formulae and
+    # casks into someone else's prefix, `--force` replacing apps there, and the
+    # prefix the one password paid for left empty. Silently, with a zero exit.
+    #
+    # So this asks the same question the preflight asks, through the same
+    # function, and stops. Not a warning that carries on: the whole value of the
+    # check is that nothing installs into an unmanaged Homebrew.
+    if ! dotfiles_homebrew_is_managed_brew "$managed_prefix" "$brew"; then
+      echo "dotfiles-work: refusing to hand the Brewfile to a Homebrew this" >&2
+      echo "       configuration does not manage." >&2
+      dotfiles_homebrew_report_elsewhere "       " "$managed_prefix" "$brew"
       exit 1
     fi
 
@@ -498,7 +535,7 @@ in
 
   home.activation.homebrewBundle =
     lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" "installPackages" "onFilesChange" "homebrewPrefix" ]
-      "run ${brewBundle}";
+      "run ${brewBundle} ${homebrewPrefix}";
 
   home.sessionVariables.EDITOR = "nvim";
   home.sessionVariables.NPM_CONFIG_PREFIX = npmPrefix;
