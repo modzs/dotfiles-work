@@ -111,7 +111,7 @@ test_gui_apps_are_linked_rather_than_copied() {
 # --- the font wezterm names actually lands ------------------------------------
 
 test_the_configured_font_is_installed_where_wezterm_looks() {
-  local generation fonts line destination family file
+  local generation fonts line destination family file nerdfonts candidate found
   if ! command -v nix >/dev/null 2>&1; then
     skip "the configured font (nix not found)"
     return 0
@@ -143,10 +143,23 @@ test_the_configured_font_is_installed_where_wezterm_looks() {
     "$ROOT/home/.config/wezterm/wezterm.lua")
   [ -n "$family" ] || fail "could not read the font family out of wezterm.lua"
 
-  # Nerd Fonts name their files after the family with the spaces removed.
+  # Nerd Fonts name their files after the family with the spaces removed. Which
+  # subdirectory the family lands in is Home Manager's layout, not a promise of
+  # this repository's, so it is searched rather than named: naming it would make
+  # a font changed correctly on both sides fail as though the link were broken.
   file=$(printf '%s\n' "$family" | tr -d ' ')
-  [ -f "$fonts/truetype/NerdFonts/Hack/$file-Regular.ttf" ] \
-    || fail "wezterm.lua asks for \"$family\", but no $file-Regular.ttf is installed"
+  nerdfonts="$fonts/truetype/NerdFonts"
+  [ -d "$nerdfonts" ] \
+    || fail "no $nerdfonts directory: the font layout moved, so this check no longer knows where to look"
+
+  found=''
+  for candidate in "$nerdfonts"/*/"$file-Regular.ttf"; do
+    [ -f "$candidate" ] || continue
+    found=$candidate
+    break
+  done
+  [ -n "$found" ] \
+    || fail "wezterm.lua asks for \"$family\", but no $file-Regular.ttf is installed under $nerdfonts"
 
   pass "packages: the font wezterm.lua names is installed into $destination"
 }

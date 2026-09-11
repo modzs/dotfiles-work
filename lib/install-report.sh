@@ -165,10 +165,11 @@ install_report_reachability_note() {
 # $2 is the prefix, passed in rather than worked out. Which prefix this
 # architecture uses is lib/homebrew-present.sh's question and has exactly one
 # implementation; a second one here would be a second answer waiting to
-# disagree. Absent, the line is printed with a placeholder rather than guessed.
+# disagree. It is required, and that is what makes the property this whole file
+# exists for hold here too: the report can only ever name a path something
+# actually resolved, never one it guessed or stood in for.
 install_report_homebrew_path_note() {
-  local indent=$1 prefix=${2:-}
-  [ -n "$prefix" ] || prefix='<prefix>'
+  local indent=$1 prefix=$2
   printf '\n'
   printf '%sThe same goes for Homebrew, and this did not check that half: the\n' "$indent"
   printf '%sprobe above looks at ~/.nix-profile/bin and nothing else. Nothing\n' "$indent"
@@ -196,10 +197,11 @@ install_report_empty_profile_warning() {
 # --- the report ---------------------------------------------------------------
 
 # $1 is an optional indent so bootstrap.sh's step margin is preserved. $2 is
-# the Homebrew prefix, for the note that points at it; the report is still
-# complete without it.
+# the Homebrew prefix the run resolved, for the note that points at it, and it
+# is required: a report that named a prefix nothing had resolved would be the
+# guess this file must not make.
 install_report() {
-  local indent=${1:-} prefix=${2:-}
+  local indent=${1:-} prefix=$2
   local count
   count=$(install_report_tool_count)
 

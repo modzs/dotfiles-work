@@ -81,7 +81,7 @@ test_the_report_says_what_was_installed_and_where() {
   home=$(install_report_fixture_home)
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
   install_report_restore_probe
 
   # The count is read off the profile, so it is a number the user can check
@@ -139,12 +139,6 @@ test_the_report_points_at_the_homebrew_path_line_too() {
   assert_not_contains "$output" "Homebrew's tools are already" \
     "the report claims Homebrew is reachable, which nothing here has checked"
 
-  # And without a prefix - the shape every other test calls it in - the report
-  # is still complete, with a placeholder rather than a guess.
-  output=$(HOME="$home" install_report "    ")
-  assert_contains "$output" "<prefix>/bin/brew shellenv" \
-    "with no prefix given, the report should print a placeholder rather than guess one"
-
   pass "report: the Homebrew half gets the same pointer the Nix half gets"
 }
 
@@ -158,7 +152,7 @@ test_an_empty_profile_is_reported_as_a_broken_install() {
   # therefore confirm a new terminal finds tools that are not there.
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
 
-  output=$(HOME="$home" install_report "    ") || true
+  output=$(HOME="$home" install_report "    " /stand-in/prefix) || true
   install_report_restore_probe
 
   assert_contains "$output" "WARNING" \
@@ -190,27 +184,27 @@ test_only_a_profile_proven_empty_fails_the_run() {
   # claim: only a profile the report has PROVEN empty is a failed run.
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
   status=0
-  HOME="$home" install_report >/dev/null || status=$?
+  HOME="$home" install_report "" /stand-in/prefix >/dev/null || status=$?
   assert_eq "$status" 0 "a complete run must exit 0"
 
   # Installed but out of reach: the tools are all there and only PATH is
   # wrong. That is the warning this change added, not a failed bootstrap.
   install_report_stub_probe "/usr/bin:/bin"
   status=0
-  HOME="$home" install_report >/dev/null || status=$?
+  HOME="$home" install_report "" /stand-in/prefix >/dev/null || status=$?
   assert_eq "$status" 0 "an unreachable but populated profile must not fail the run"
 
   # And the third state has to survive in the status too. A check that could
   # not answer is unverified - never failure, never fine.
   install_report_stub_probe unavailable
   status=0
-  HOME="$home" install_report >/dev/null || status=$?
+  HOME="$home" install_report "" /stand-in/prefix >/dev/null || status=$?
   assert_eq "$status" 0 "a check that could not answer must not fail the run"
 
   rm -rf "$home/.nix-profile"
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
   status=0
-  HOME="$home" install_report >/dev/null || status=$?
+  HOME="$home" install_report "" /stand-in/prefix >/dev/null || status=$?
   [ "$status" != 0 ] \
     || fail "a run that installed nothing exited 0, so it reported success"
 
@@ -224,11 +218,11 @@ test_the_report_mentions_the_zshrc_backup_only_when_there_is_one() {
   home=$(install_report_fixture_home)
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
 
-  without=$(HOME="$home" install_report)
+  without=$(HOME="$home" install_report "" /stand-in/prefix)
   # -b backup renames an existing ~/.zshrc rather than failing the switch, and
   # nothing else in the run mentions that the old file still exists.
   touch "$home/.zshrc.backup"
-  with=$(HOME="$home" install_report)
+  with=$(HOME="$home" install_report "" /stand-in/prefix)
   install_report_restore_probe
 
   assert_not_contains "$without" ".zshrc.backup" \
@@ -248,7 +242,7 @@ test_an_unreachable_profile_is_a_loud_warning_naming_etc_zshrc() {
   # state a re-deployed /etc/zshrc leaves a managed Mac in.
   install_report_stub_probe "/usr/bin:/bin:/usr/sbin:/sbin"
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
   install_report_restore_probe
 
   assert_contains "$output" "WARNING" \
@@ -273,7 +267,7 @@ test_a_reachable_profile_produces_no_warning() {
   home=$(install_report_fixture_home)
   install_report_stub_probe "$home/.nix-profile/bin:/usr/bin:/bin"
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
   install_report_restore_probe
 
   assert_not_contains "$output" "WARNING" \
@@ -289,7 +283,7 @@ test_an_unanswerable_check_is_never_reported_as_fine() {
   home=$(install_report_fixture_home)
   install_report_stub_probe unavailable
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
   install_report_restore_probe
 
   # The whole episode this file exists for was a false all-clear. A check that
@@ -328,7 +322,7 @@ test_a_startup_file_that_prints_is_not_read_as_path() {
     return 0
   fi
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
 
   assert_contains "$output" "Checked: a new login shell does find them" \
     "the profile is on the login PATH, so the report should say so"
@@ -357,7 +351,7 @@ test_a_path_fix_in_zshrc_local_is_seen_as_reachable() {
     return 0
   fi
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
 
   assert_contains "$output" "Checked: a new login shell does find them" \
     "a PATH fixed in ~/.zshrc.local does reach a new terminal, so say so"
@@ -377,7 +371,7 @@ test_a_zshrc_local_that_stops_the_probe_reads_as_unverified() {
   # this check must never give is a confident one.
   printf '%s\n' 'exit 1' >"$home/.zshrc.local"
 
-  output=$(HOME="$home" install_report "    ")
+  output=$(HOME="$home" install_report "    " /stand-in/prefix)
 
   assert_contains "$output" "Not checked" \
     "a probe the user's own file stopped must read as unverified"
