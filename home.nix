@@ -453,6 +453,8 @@ in
     neovim
     # Node from nixpkgs, pinned by flake.lock. Homebrew's node would put its
     # global npm prefix in /opt/homebrew; this one is pointed at ~/.npm-global.
+    # It is also what markdown-preview.nvim's build step runs on, so removing it
+    # breaks that plugin's install as well as `npm install -g`.
     nodejs_26
     # the font everything renders in
     nerd-fonts.hack
