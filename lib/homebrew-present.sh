@@ -84,6 +84,33 @@ dotfiles_homebrew_library() {
   esac
 }
 
+# Where Homebrew's launcher sits inside a prefix, canonically. Every place that
+# needs that path goes through this, and it is the only place the two are ever
+# joined.
+#
+# The normalization is the reason it exists rather than a nicety. One of the
+# prefixes handed in comes straight from the environment, and a user who exports
+# HOMEBREW_PREFIX by hand with a trailing slash - rather than pasting what
+# `brew shellenv` prints - is spelling the same path a way the kernel accepts
+# and string equality does not. Composed raw, that yields a launcher with a
+# doubled slash in the middle: executable, plainly the managed one, and unequal
+# to the prefix's own launcher - so both doors refused it, and told the user
+# that two spellings of one path were two different Homebrews. Normalizing only
+# where the comparison happens does not fix it, because the doubled slash is
+# inside the composed value; it has to be gone before the two halves are joined,
+# which is here.
+dotfiles_homebrew_launcher() {
+  local prefix=$1
+  while [ "$prefix" != / ] && [ "${prefix%/}" != "$prefix" ]; do
+    prefix=${prefix%/}
+  done
+  # Named rather than printed inline. tests/safety.test.sh reads a bare
+  # `"$prefix/bin/brew"` in argument position as an invocation, and it is right
+  # to - widening that guard is a worse trade than naming the path.
+  local launcher="$prefix/bin/brew"
+  printf '%s\n' "$launcher"
+}
+
 # The marker file whose presence means "this prefix was created by a Nix-managed
 # Homebrew setup and needs no privileged initialization again".
 #
@@ -237,7 +264,7 @@ dotfiles_homebrew_is_occupied() {
 dotfiles_homebrew_occupants() {
   local prefix=$1 library=$2 code launcher
   code="$library/Homebrew"
-  launcher="$prefix/bin/brew"
+  launcher=$(dotfiles_homebrew_launcher "$prefix")
   if dotfiles_homebrew_is_occupied "$code"; then
     printf '%s\n' "$code"
   fi
@@ -316,8 +343,17 @@ dotfiles_homebrew_report_occupied() {
 
 # What to tell a user whose Homebrew is somewhere other than the prefix this
 # configuration would manage. The third of these, and told the same way for the
-# same reason: same register, same "nothing has been changed", same "this is
-# your decision to make".
+# same reason: same register, same "this is your decision to make".
+#
+# What it promises is narrower than the other two, because its two callers reach
+# a user at very different moments. bootstrap.sh's preflight runs before Nix is
+# installed and can say nothing at all has happened - and it does, separately.
+# The Brewfile step runs LAST in a switch, after Home Manager has relinked the
+# home directory, installed the Nix packages, run the on-change hooks and
+# repointed the prefix's symlinks, and rebuild.sh says so five lines later. A
+# blanket "nothing has been changed" here would have one run make two
+# contradictory statements about the same machine. So this promises only what is
+# true at both moments: neither Homebrew was touched.
 #
 # $1 is the indent, $2 the prefix this configuration manages, $3 the launcher
 # that was found instead.
@@ -334,9 +370,10 @@ dotfiles_homebrew_report_elsewhere() {
   echo "${indent}cask into a Homebrew this configuration does not manage, and" >&2
   echo "${indent}leave the one it does empty." >&2
   echo "${indent}" >&2
-  echo "${indent}Nothing has been changed, and nothing here will remove or" >&2
-  echo "${indent}move a Homebrew it did not install - on a work Mac that is" >&2
-  echo "${indent}not a setup script's decision." >&2
+  echo "${indent}Neither Homebrew has been touched: nothing was installed," >&2
+  echo "${indent}upgraded or removed, in either prefix. Nothing here will" >&2
+  echo "${indent}remove or move a Homebrew it did not install - on a work Mac" >&2
+  echo "${indent}that is not a setup script's decision." >&2
   echo "${indent}" >&2
   echo "${indent}To use this configuration's Homebrew on this Mac, remove any" >&2
   echo "${indent}shellenv line in your shell profile that points" >&2
@@ -355,12 +392,8 @@ dotfiles_homebrew_report_elsewhere() {
 # installed, and the Brewfile step asks again on every switch before it hands
 # Homebrew anything.
 dotfiles_homebrew_is_managed_brew() {
-  local prefix=$1 found=$2
-  # Named rather than compared inline. tests/safety.test.sh reads a bare
-  # `"$prefix/bin/brew"` after `!=` as an invocation, and it is right to -
-  # widening that guard to recognise one more shape of comparison is a worse
-  # trade than naming the path.
-  local managed_brew="$prefix/bin/brew"
+  local prefix=$1 found=$2 managed_brew
+  managed_brew=$(dotfiles_homebrew_launcher "$prefix")
   [ "$found" = "$managed_brew" ]
 }
 
@@ -529,7 +562,7 @@ dotfiles_homebrew_prefix_link() {
 dotfiles_homebrew_searched() {
   local searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
   if [ -n "${HOMEBREW_PREFIX:-}" ]; then
-    searched="$HOMEBREW_PREFIX/bin/brew"
+    searched=$(dotfiles_homebrew_launcher "$HOMEBREW_PREFIX")
   fi
   printf '%s\n' "$searched"
 }
@@ -546,7 +579,7 @@ dotfiles_homebrew_find() {
   local candidate found=""
 
   if [ -n "${HOMEBREW_PREFIX:-}" ]; then
-    found="$HOMEBREW_PREFIX/bin/brew"
+    found=$(dotfiles_homebrew_launcher "$HOMEBREW_PREFIX")
     if [ -x "$found" ]; then
       printf '%s\n' "$found"
     fi

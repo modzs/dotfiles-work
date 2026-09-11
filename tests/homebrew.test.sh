@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 27
+dotfiles_test_expect 28
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -1269,10 +1269,75 @@ STANDIN
   pass "homebrew: the step refuses a brew outside the prefix it manages, and installs nothing"
 }
 
+test_a_trailing_slash_on_homebrew_prefix_is_still_the_managed_homebrew() {
+  local root generation script setup binary prefix output status=0
+  if ! command -v nix >/dev/null 2>&1; then
+    skip "trailing-slash prefix check (nix not found)"
+    return 0
+  fi
+
+  # `export HOMEBREW_PREFIX=/opt/homebrew/` - what a user writes by hand instead
+  # of pasting what `brew shellenv` prints. The kernel collapses the doubled
+  # slash that composes into, so the launcher is executable and is plainly the
+  # managed one; string equality disagreed, and both doors refused it while
+  # printing two spellings of one path as though they were two Homebrews.
+  #
+  # Asserted as the outcome both doors reach rather than as the shape of the
+  # path, because the path is not the contract - "this is ours" is.
+  generation=$(dotfiles_generation "$SYSTEM") \
+    || fail "could not build the activation package"
+  script=$(dotfiles_brew_bundle_script "$generation") \
+    || fail "the activation script does not run a Homebrew step at all"
+
+  # The Brewfile step: it must proceed, which is only visible as the stand-in
+  # being invoked. A refusal here records nothing.
+  root=$(dotfiles_test_tmproot dotfiles-trailing)
+  mkdir -p "$root/home/$(dirname "$BREWFILE_TARGET")" "$root/prefix/bin"
+  cp "$generation/home-files/$BREWFILE_TARGET" "$root/home/$BREWFILE_TARGET"
+  cat >"$root/prefix/bin/brew" <<STANDIN
+#!/bin/sh
+printf 'called: %s\n' "\$*" >>"$root/calls"
+STANDIN
+  chmod +x "$root/prefix/bin/brew"
+
+  output=$(env -i \
+    HOME="$root/home" \
+    PATH=/usr/bin:/bin \
+    HOMEBREW_PREFIX="$root/prefix/" \
+    "$script" "$root/prefix" 2>&1) || status=$?
+
+  [ "$status" = 0 ] \
+    || fail "the Brewfile step refused its own managed Homebrew over a trailing slash: $output"
+  [ -e "$root/calls" ] \
+    || fail "the Brewfile step installed nothing, so it did not recognise the managed Homebrew"
+
+  # And the preflight, which reaches the same question through the same
+  # function. Its fixture needs a launcher that is ours by the state machine's
+  # rules too - a symlink into the store - so it borrows the real generated one.
+  setup=$(dotfiles_homebrew_prefix_script "$generation") \
+    || fail "the activation script does not run a Homebrew prefix-setup step at all"
+  binary=$(dotfiles_homebrew_prefix_script_files "$setup" | sed -n 2p)
+  [ -x "$binary" ] || fail "the generated brew is not where the setup step says it is"
+
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  ln -shf "$binary" "$prefix/bin/brew"
+
+  status=0
+  output=$(dotfiles_run_preflight "$prefix/" "$prefix") || status=$?
+  [ "$status" = 0 ] \
+    || fail "the preflight refused this Mac's own managed Homebrew over a trailing slash: $output"
+  assert_contains "$output" "already set up" \
+    "the preflight did not recognise the prefix it was given as the managed one"
+
+  pass "homebrew: a HOMEBREW_PREFIX with a trailing slash is still the managed Homebrew, at both doors"
+}
+
 # --- the two answers to "which prefix" agree ----------------------------------
 
 test_the_prefix_the_setup_step_manages_is_this_architectures() {
-  local generation setup expected searched bundle setup_library bundle_library
+  local generation setup expected argument searched bundle setup_library bundle_library
   if ! command -v nix >/dev/null 2>&1; then
     skip "prefix agreement check (nix not found)"
     return 0
@@ -1301,6 +1366,17 @@ test_the_prefix_the_setup_step_manages_is_this_architectures() {
     || fail "the library could not resolve this Mac's Homebrew prefix"
   assert_contains "$(cat "$setup")" "\"$expected\"" \
     "the built prefix-setup step manages a different prefix than the library reports"
+
+  # The same assertion for the Brewfile step, which needs its own because the
+  # two carry the value differently: the setup step has it baked in, and the
+  # Brewfile step is handed it on the activate line. That line is the only
+  # supplier - the stand-in runs elsewhere in this file pass their own temp
+  # prefix, deliberately, so none of them would notice it going missing or
+  # turning into the library path.
+  argument=$(dotfiles_brew_bundle_argument "$generation") \
+    || fail "the activate line does not pass the Brewfile step the prefix it manages, so every switch would stop at it"
+  assert_eq "$argument" "$expected" \
+    "activation hands the Brewfile step a different prefix than the library reports"
 
   # And the library's own two answers have to be consistent with each other:
   # /opt/homebrew has its library inside it, /usr/local keeps it one level down.
@@ -1558,6 +1634,7 @@ test_the_preflight_refuses_a_homebrew_outside_the_managed_prefix
 test_the_preflight_and_the_step_agree_on_where_brew_is
 test_a_missing_homebrew_fails_with_an_explanation
 test_the_homebrew_step_refuses_a_brew_outside_the_managed_prefix
+test_a_trailing_slash_on_homebrew_prefix_is_still_the_managed_homebrew
 test_the_prefix_the_setup_step_manages_is_this_architectures
 test_the_generated_brew_is_pinned_to_this_prefix
 test_no_tool_is_installed_by_both_nix_and_homebrew

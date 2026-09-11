@@ -234,6 +234,24 @@ dotfiles_brew_bundle_script() {
   printf '%s\n' "$found"
 }
 
+# The Homebrew prefix the built activate script PASSES to that step.
+#
+# Read out of the same artifact and for the same reason. The step takes the
+# prefix it manages as an argument rather than having it baked in, which is what
+# lets the stand-in runs point it at a temp directory - but it also moved the
+# real value out of the script and onto this one line, where nothing looked at
+# it. Dropping the argument, or passing the library path instead of the prefix
+# (one identifier away in the same let-block), left the whole suite green while
+# every real switch died at its last step.
+dotfiles_brew_bundle_argument() {
+  local generation=$1 found
+  found=$(sed -n \
+    's|^run /nix/store/[a-z0-9]*-dotfiles-work-brew-bundle \(.*\)$|\1|p' \
+    "$generation/activate" | head -n1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
 # The store path of the Homebrew prefix-setup step, found the same way and for
 # the same reason: only its presence in the built activate script proves that
 # the script the tests exercise is the one activation runs.
