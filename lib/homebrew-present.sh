@@ -85,8 +85,10 @@ dotfiles_homebrew_library() {
 }
 
 # Where Homebrew's launcher sits inside a prefix, canonically. Every place that
-# needs that path goes through this, and it is the only place the two are ever
-# joined.
+# has to judge or report a launcher goes through this, so there is one spelling
+# of "the managed brew". The link step below is the one exception and stays one:
+# it composes the destination it writes to, from the literal prefix home.nix
+# hands it, which cannot carry the spelling described next.
 #
 # The normalization is the reason it exists rather than a nicety. One of the
 # prefixes handed in comes straight from the environment, and a user who exports

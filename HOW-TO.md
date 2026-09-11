@@ -110,9 +110,10 @@ upgrade an outdated library that install needs. Nothing here asks it to, and
 nothing on the lists is upgraded just for being there.
 
 Two Homebrew steps run on every rebuild, in this order. The first points the
-prefix at the Homebrew in the Nix store - three symlinks, no network, no
-password. The second hands over the Brewfile, and that one does need the network
-even when everything on the lists is already installed.
+prefix at the Homebrew in the Nix store - two symlinks and a stub repository
+directory, no network, no password. The second hands over the Brewfile, and that
+one does need the network even when everything on the lists is already
+installed.
 
 What a rebuild cannot do is change Homebrew itself: its code is a read-only
 symlink into the store, the self-update path is patched out, and `brew update`
@@ -317,9 +318,11 @@ That restores your home directory. Two things it does not undo, both on purpose:
 - **Nix itself stays installed, and so does Homebrew.** Removing Nix is a
   separate, system-level operation. So is removing Homebrew - and note that the
   prefix this repo created is a normal Homebrew prefix owned by you, except that
-  `<prefix>/Library/Homebrew` is a symlink into the Nix store rather than a
-  checkout. Homebrew's own uninstall instructions apply; that symlink and the
-  `.managed_by_nix_darwin` marker beside it are what you would remove by hand.
+  Homebrew's library directory - `/opt/homebrew/Library/Homebrew` on Apple
+  silicon, `/usr/local/Homebrew/Library/Homebrew` on Intel - is a symlink into
+  the Nix store rather than a checkout. Homebrew's own uninstall instructions
+  apply; that symlink and the `<prefix>/.managed_by_nix_darwin` marker are what
+  you would remove by hand.
 
 ---
 
