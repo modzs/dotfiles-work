@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 24
+dotfiles_test_expect 25
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -697,6 +697,50 @@ test_a_marked_prefix_that_lost_its_directories_is_refused_before_ln() {
     fresh "removing the marker does not return the prefix to a state bootstrap.sh would set up"
 
   pass "prefix: a marked prefix that lost its directories is refused with an explanation, never inside ln"
+}
+
+test_homebrews_own_pruning_does_not_lock_the_prefix() {
+  local prefix output status=0
+
+  # The other half of the rule above, and the case a future widening breaks
+  # first. HOMEBREW DELETES MOST OF THE PREFIX'S DIRECTORIES ITSELF. Its
+  # `Keg.must_exist_subdirectories` is `bin etc include lib sbin share opt
+  # var/homebrew/linked`; everything else it linked into is rmdir'd once empty
+  # by `Keg#unlink`, and `Cleanup#prune_prefix_symlinks_and_directories` removes
+  # them on a schedule with no user action at all. `share/zsh/site-functions` is
+  # the one every user meets: install `gh`, uninstall it, and both zsh
+  # directories are gone.
+  #
+  # So a prefix has to survive that. Requiring them made `brew uninstall gh`
+  # lock the prefix permanently, with no way back but deleting the marker and
+  # spending the one password this repository promises a rebuild never needs.
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  [ -d "$prefix/share/zsh/site-functions" ] \
+    || fail "the initializer did not create the directories this check is about"
+
+  rmdir "$prefix/share/zsh/site-functions" "$prefix/share/zsh" \
+    || fail "could not prune the zsh directories the way Homebrew does"
+
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    managed "a prefix Homebrew pruned its own directories out of is no longer usable"
+
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_link \
+    "$prefix" "$prefix/Library" /nix/store/unused-code /nix/store/unused-brew 2>&1) || status=$?
+  [ "$status" = 0 ] \
+    || fail "the setup step refused a prefix Homebrew had pruned (exit $status): $output"
+  assert_eq "$(readlink "$prefix/bin/brew")" /nix/store/unused-brew \
+    "the setup step did not link the launcher into a pruned prefix"
+  assert_eq "$(readlink "$prefix/Library/Homebrew")" /nix/store/unused-code \
+    "the setup step did not link the Homebrew code into a pruned prefix"
+
+  # And no password is implied: the marker is still there, so bootstrap.sh's
+  # privileged step stays skipped.
+  [ -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the marker was removed, so the next bootstrap would ask for a password again"
+
+  pass "prefix: a prefix Homebrew pruned its own directories out of still works, with no password"
 }
 
 test_the_prefix_setup_step_links_homebrew_without_root() {
@@ -1379,6 +1423,7 @@ test_the_privileged_step_refuses_a_homebrew_it_did_not_install
 test_the_privileged_step_refuses_a_prefix_it_cannot_hand_over
 test_a_marked_prefix_this_account_cannot_use_is_not_managed
 test_a_marked_prefix_that_lost_its_directories_is_refused_before_ln
+test_homebrews_own_pruning_does_not_lock_the_prefix
 test_the_prefix_setup_step_links_homebrew_without_root
 test_the_prefix_setup_step_refuses_a_prefix_bootstrap_has_not_prepared
 test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install

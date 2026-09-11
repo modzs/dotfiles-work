@@ -102,21 +102,41 @@ went down anyway, which left a prefix that could never be bootstrapped or rebuil
 again. The marker is written **only after the handover is verified**, and what
 it means is the one invariant everything here turns on:
 
-> every path on `dotfiles_homebrew_prefix_directories`' list, plus the library,
-> exists and belongs to this account.
+> `$prefix/bin` and the library **exist** and belong to this account, and no
+> directory the privileged step creates is somebody else's.
 
 Not "the script ran once", and not "nothing present is unusable" - both of those
 were tried and both re-opened the same loop, the second because a prefix whose
 `bin` had been *deleted* has nothing present to complain about. Following
-Homebrew's own uninstall instructions is how a real user gets there, and
-`ln` then died on a bare errno mid-switch. `dotfiles_homebrew_unusable` counts a
+Homebrew's own uninstall instructions is how a real user gets there, and `ln`
+then died on a bare errno mid-switch. `dotfiles_homebrew_unusable` counts a
 missing path only when the marker is present, because before it nothing has been
 promised and a bare prefix is exactly what the privileged step is for; a path
 that is present and somebody else's counts either way. That asymmetry is read
-once, in that function, and `dotfiles_homebrew_prefix_state` is the only
-boundary any caller goes through - which is why the link step re-checks nothing
-and its `ln` cannot fail that way any more. Two lists would be two promises, so
-`lib/homebrew-initialize-prefix.sh` creates the list rather than restating it.
+once, in that function, and `dotfiles_homebrew_prefix_state` is the only boundary
+any caller goes through - which is why the link step re-checks nothing and its
+`ln` cannot fail that way any more.
+
+**The existence half covers those two paths and no others, and that is not an
+oversight to tidy up.** They are the only two `dotfiles_homebrew_prefix_link`
+writes into, so they are all the `ln` guarantee needs - and every other directory
+in the prefix belongs to Homebrew, which *deletes them itself*. In the pinned
+source `Keg.must_exist_subdirectories` is `bin etc include lib sbin share opt
+var/homebrew/linked`; `share/zsh` and `share/zsh/site-functions` are not on it,
+so `Keg#unlink` rmdirs them once empty and
+`Cleanup#prune_prefix_symlinks_and_directories` removes them unprompted on the
+periodic cleanup this file already notes runs about monthly. Promising the whole
+creation list made `brew uninstall gh` lock the prefix permanently, escapable
+only by deleting the marker and re-bootstrapping for another password - so
+widening it back for symmetry with the ownership half breaks the one promise
+`rebuild.sh` exists to keep. `test_homebrews_own_pruning_does_not_lock_the_prefix`
+is what stops that.
+
+Creating is not promising, which is why the two lists in that function are
+different sizes: `dotfiles_homebrew_prefix_directories` is what the privileged
+step creates and what the ownership half inspects, and
+`lib/homebrew-initialize-prefix.sh` creates it rather than restating it, because
+two creation lists would be two different prefixes.
 
 The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
@@ -173,13 +193,16 @@ explanation, or if a tool ends up installed by both Nix and Homebrew. It runs th
 prefix steps against a stand-in prefix in a temp directory - created, marked,
 re-run, linked, re-linked - and fails if an existing Homebrew is touched, if a
 second run rewrites the marker, if the unprivileged step needs root, or if it
-tries instead of refusing when the prefix is not ready. Three of those checks are
+tries instead of refusing when the prefix is not ready. Four of those checks are
 about the prefix it may not have: a directory the run cannot hand over must make
 it refuse **and leave no marker**; a marked prefix the invoking account cannot
-use must not come back `managed`; and a marked prefix whose `bin` and library
-have been deleted must be refused **with an explanation, never inside `ln`** -
-that one asserts the absence of `ln:` in the output, because a raw errno is the
-failure it exists to prevent. The first two reach that state with a mode that
+use must not come back `managed`; a marked prefix whose `bin` and library have
+been deleted must be refused **with an explanation, never inside `ln`** - that
+one asserts the absence of `ln:` in the output, because a raw errno is the
+failure it exists to prevent; and a marked prefix whose `share/zsh` directories
+Homebrew has pruned must still be `managed` and must still link, which is the
+check that keeps the promise from widening back. The first two reach that state
+with a mode that
 denies its own owner write, because creating a root-owned directory would need
 root and no test here may have it - the code decides both by ownership and mode,
 so one stands in for the other. The stand-in prefix is possible because the
