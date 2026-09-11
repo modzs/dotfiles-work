@@ -380,6 +380,28 @@ documents that seam.
   reality**, never the value already in the config. The repo this one replaces
   offered its configured machine name as the default, so pressing Enter silently
   renamed the Mac.
+- **Neovim's plugins are managed by lazy.nvim, and nothing in this repo installs
+  them.** They install on the next `nvim` launch, pinned by the tracked
+  `home/.config/nvim/lazy-lock.json`. The owner was offered an activation-time or
+  rebuild-time `Lazy! sync` and chose per-launch install, so do not add one - a
+  rebuild would then need a writable plugin tree and a network, and `rebuild.sh`
+  exists to refuse before it writes. Let a real install write the lock rather
+  than hand-editing it, but revert every line the change did not intend: `Lazy!
+  sync` bumps *all* plugins, so adding one plugin the lazy way moves nine other
+  pins as a side effect.
+- **`nvim-treesitter` is deliberately absent.** The `neovim` in `home.packages`
+  ships the `markdown` and `markdown_inline` parsers `render-markdown.nvim`
+  reads a buffer with, so they are pinned by `flake.lock` alongside the editor
+  that loads them; nvim-treesitter's parsers are compiled at run time and pinned
+  by nothing. Anyone adding it anyway needs `branch = 'main'` and the
+  tree-sitter CLI, because its `master` is broken on the pinned Neovim. Check
+  the claim rather than inheriting it when nixpkgs moves - the parsers live in
+  `lib/nvim/parser/` of the built `neovim`.
+- **`markdown-preview.nvim` is declared with `ft` and no `cmd`, on purpose.**
+  `home/.config/nvim/lua/plugins/markdown.lua` carries the mechanism and why a
+  `cmd` stub makes the failure worse rather than better; read it there rather
+  than restating it here, because two copies of that reasoning drifting apart is
+  exactly what went wrong upstream of this port.
 
 ## Sharp edges found the hard way
 
@@ -433,6 +455,19 @@ documents that seam.
 - `nix eval` on this flake prints an upstream warning about an `options.json`
   derivation built without proper context. It comes from Home Manager's own
   manual module and is not caused by anything here.
+- **Exercising this Neovim config means driving an isolated one, not `nvim`.**
+  `~/.config/nvim` is a symlink to the activated Home Manager generation, so a
+  plain `nvim` run anywhere on the machine loads some other checkout's config and
+  writes its `lazy-lock.json` back into that checkout. Point `XDG_CONFIG_HOME` at
+  a scratch directory whose `nvim` entry links to the working tree's
+  `home/.config/nvim`, give it scratch `XDG_DATA_HOME`, `XDG_STATE_HOME` and
+  `XDG_CACHE_HOME`, and check `stdpath('config')` resolves where you meant before
+  letting lazy install anything. Keep that scratch path **short**: `vim.loader`
+  names its bytecode cache after the percent-encoded absolute path of every file
+  it compiles, so a deep temp directory fails with `ENAMETOOLONG` from inside
+  `write_cachefile` and the failure reads like a plugin error. `vim.fn.system`
+  also hangs in `--headless`; run the HTTP check from the shell alongside nvim
+  instead.
 
 ## Maintaining this file
 
