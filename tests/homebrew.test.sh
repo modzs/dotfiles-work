@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 23
+dotfiles_test_expect 24
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -651,6 +651,52 @@ test_a_marked_prefix_this_account_cannot_use_is_not_managed() {
   chmod 0755 "$prefix/bin"
 
   pass "prefix: a marked prefix this account cannot use is refused rather than called managed"
+}
+
+test_a_marked_prefix_that_lost_its_directories_is_refused_before_ln() {
+  local prefix output status=0
+
+  # The reproduction, in the order a real user reaches it. Bootstrap succeeds;
+  # later the user follows Homebrew's own uninstall instructions - HOW-TO.md
+  # points at them - which takes the prefix's directories away and leaves this
+  # repository's marker behind.
+  prefix=$(dotfiles_fresh_prefix)
+  dotfiles_run_initializer "$prefix" >/dev/null \
+    || fail "the initializer failed while preparing the fixture"
+  rm -rf "${prefix:?}/bin" "${prefix:?}/Library"
+  [ -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the fixture lost the marker, so this proves nothing"
+
+  # The marker promised these paths. Reporting the prefix as managed is what
+  # sent bootstrap.sh past the only step that could rebuild them.
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    unusable "a marked prefix that no longer holds what the marker promises is still reported as managed"
+
+  output=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_link \
+    "$prefix" "$prefix/Library" /nix/store/unused-code /nix/store/unused-brew 2>&1) || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the setup step accepted a prefix that no longer holds what the marker promises"
+
+  # It has to refuse rather than reach `ln` and die on a raw errno message. That
+  # death under `set -eu` was the whole failure: no explanation, no troubleshooting
+  # entry, and no way out but deleting the marker by hand.
+  assert_not_contains "$output" "ln:" \
+    "the setup step reached ln instead of refusing, so the failure is a raw errno again"
+  assert_contains "$output" "$prefix/bin" \
+    "the refusal does not name the path that went missing"
+  assert_contains "$output" "(missing)" \
+    "the refusal does not distinguish a missing path from one that is somebody else's"
+  assert_contains "$output" ".managed_by_nix_darwin" \
+    "the refusal does not say that removing the marker redoes the setup"
+
+  # And the way out actually works: without the marker nothing is promised, so
+  # the prefix is fresh again and the privileged step will rebuild it.
+  rm -f "$prefix/.managed_by_nix_darwin"
+  assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
+    fresh "removing the marker does not return the prefix to a state bootstrap.sh would set up"
+
+  pass "prefix: a marked prefix that lost its directories is refused with an explanation, never inside ln"
 }
 
 test_the_prefix_setup_step_links_homebrew_without_root() {
@@ -1332,6 +1378,7 @@ test_the_privileged_step_does_nothing_the_second_time
 test_the_privileged_step_refuses_a_homebrew_it_did_not_install
 test_the_privileged_step_refuses_a_prefix_it_cannot_hand_over
 test_a_marked_prefix_this_account_cannot_use_is_not_managed
+test_a_marked_prefix_that_lost_its_directories_is_refused_before_ln
 test_the_prefix_setup_step_links_homebrew_without_root
 test_the_prefix_setup_step_refuses_a_prefix_bootstrap_has_not_prepared
 test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install

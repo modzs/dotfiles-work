@@ -107,6 +107,11 @@ DOTFILES_HOMEBREW_REPOSITORY_DIR=".homebrew-is-managed-by-nix"
 # creates, minus the prefix directory itself: that one is left root-owned on
 # purpose - `install -d -o root -g wheel` is what creates it - and it is the
 # contents that have to be the user's.
+#
+# The one list, and lib/homebrew-initialize-prefix.sh creates exactly it. Two
+# copies would be two promises: the marker says every path here is there and is
+# the user's, and a prefix set up from a different list would fail that the
+# moment it was written.
 dotfiles_homebrew_prefix_directories() {
   local prefix=$1 dir
   for dir in bin etc include lib sbin share var opt \
@@ -117,16 +122,26 @@ dotfiles_homebrew_prefix_directories() {
   done
 }
 
-# The paths a prefix already holds that the account cannot use, one per line, or
-# nothing at all.
+# The paths this prefix cannot give the account, one per line, or nothing at
+# all. The whole of the handover rule, in one place, and it has exactly two
+# halves.
 #
-# A path that is not there yet is not a problem: the privileged step creates the
-# ones it needs and hands those over. A path that is there and is somebody
-# else's is, because this repository will not take ownership of a directory it
-# did not create. Homebrew's own installer will - it chmods and chowns whatever
-# it finds in the prefix - and that is the one place this port deliberately
-# stops short of it. On a Mac an employer manages, reassigning directories that
-# were already there is not a setup script's decision to make.
+# A path that IS there and is somebody else's counts, whether or not the prefix
+# claims to be set up, because this repository will not take ownership of a
+# directory it did not create. Homebrew's own installer will - it chmods and
+# chowns whatever it finds in the prefix - and that is the one place this port
+# deliberately stops short of it. On a Mac an employer manages, reassigning
+# directories that were already there is not a setup script's decision to make.
+#
+# A path that is NOT there counts only once the marker is present, and the
+# asymmetry is the point rather than an exception. The marker's meaning is
+# "every path this prefix promises exists and is this user's"; before it is
+# written nothing has been promised, and a prefix with none of these directories
+# is simply one the privileged step has not reached yet. Reading it the other
+# way round turns every first bootstrap into a refusal; not reading it at all is
+# what let a prefix whose bin had been deleted go on calling itself managed,
+# with bootstrap.sh skipping the only step that could rebuild it and every
+# switch afterwards dying inside `ln`.
 #
 # $3 is the uid to judge against, and defaults to the invoking account. The
 # privileged step has to pass the owner's uid explicitly: it runs as root, for
@@ -134,11 +149,19 @@ dotfiles_homebrew_prefix_directories() {
 # a directory the user cannot write. Ownership and mode are read instead, which
 # gives the same answer whoever asks.
 dotfiles_homebrew_unusable() {
-  local prefix=$1 library=$2 uid=${3:-} path info owner mode
+  local prefix=$1 library=$2 uid=${3:-} path info owner mode promised=""
   [ -n "$uid" ] || uid=$(id -u)
+  if [ -e "$prefix/$DOTFILES_HOMEBREW_MARKER" ]; then
+    promised=yes
+  fi
   { dotfiles_homebrew_prefix_directories "$prefix"; printf '%s\n' "$library"; } \
     | while IFS= read -r path; do
-        [ -e "$path" ] || continue
+        if [ ! -e "$path" ]; then
+          if [ -n "$promised" ]; then
+            printf '%s\n' "$path"
+          fi
+          continue
+        fi
         info=$(/usr/bin/stat -f '%u %Sp' "$path" 2>/dev/null) || {
           printf '%s\n' "$path"
           continue
@@ -209,11 +232,12 @@ dotfiles_homebrew_occupants() {
 #
 #   occupied  something that is not ours is in the way. Never converted, never
 #             migrated, never deleted - the run stops and says what it found.
-#   unusable  the prefix holds directories that are not this account's, so it
-#             cannot be handed over without taking ownership of something this
-#             repository did not create. Also the run stops.
-#   managed   the marker is there and the prefix really is the account's, so the
-#             privileged setup has already run and must not run again.
+#   unusable  the prefix cannot be given to this account - it holds directories
+#             that are not the account's, or it carries the marker and no longer
+#             holds what the marker promises. Also the run stops.
+#   managed   the marker is there AND every path it promises is there and is
+#             this account's, so the privileged setup has already run and must
+#             not run again.
 #   fresh     none of those. The prefix may not exist at all, or may exist and
 #             be empty of Homebrew, which is the normal state of /usr/local on
 #             any Mac.
@@ -224,6 +248,11 @@ dotfiles_homebrew_occupants() {
 # deciding `managed` from the marker alone reported a prefix nothing could write
 # to as finished, so bootstrap.sh said "already set up; no password needed" and
 # skipped the only step that looks at it, while every switch afterwards failed.
+#
+# What every caller may therefore assume, and the reason none of them re-checks:
+# `managed` means $prefix/bin and $library exist and this account can write
+# them. dotfiles_homebrew_prefix_link depends on that outright - it is what
+# makes its `ln` unable to fail the way it once did.
 dotfiles_homebrew_prefix_state() {
   local prefix=$1 library=$2 uid=${3:-}
   if [ -n "$(dotfiles_homebrew_occupants "$prefix" "$library")" ]; then
@@ -272,10 +301,14 @@ dotfiles_homebrew_report_occupied() {
 # $1 is the indent, $2 the prefix, $3 the library, $4 the uid to judge against.
 dotfiles_homebrew_report_unusable() {
   local indent=$1 prefix=$2 library=$3 uid=${4:-} path
-  echo "${indent}$prefix already holds directories that do not belong to your" >&2
-  echo "${indent}account. They are in the way at:" >&2
+  echo "${indent}$prefix cannot be given to your account. These paths are" >&2
+  echo "${indent}either missing or somebody else's:" >&2
   dotfiles_homebrew_unusable "$prefix" "$library" "$uid" | while IFS= read -r path; do
-    echo "${indent}  $path" >&2
+    if [ -e "$path" ]; then
+      echo "${indent}  $path" >&2
+    else
+      echo "${indent}  $path (missing)" >&2
+    fi
   done
   echo "${indent}" >&2
   echo "${indent}Nothing has been changed. This repository creates the" >&2
@@ -284,9 +317,16 @@ dotfiles_homebrew_report_unusable() {
   echo "${indent}share with software you did not install, reassigning a" >&2
   echo "${indent}directory out from under it is not a setup script's decision." >&2
   echo "${indent}" >&2
-  echo "${indent}If you want this repository to manage Homebrew on this Mac," >&2
-  echo "${indent}give those directories to your own account first - HOW-TO.md" >&2
-  echo "${indent}says how - and run ./bootstrap.sh again." >&2
+  echo "${indent}A path marked (missing) means this prefix still carries this" >&2
+  echo "${indent}repository's marker but no longer holds what the marker" >&2
+  echo "${indent}promises - most often because Homebrew's own uninstall steps" >&2
+  echo "${indent}were followed here afterwards. Delete the marker file at" >&2
+  echo "${indent}$prefix/$DOTFILES_HOMEBREW_MARKER and run ./bootstrap.sh" >&2
+  echo "${indent}again; it will set the prefix up from scratch." >&2
+  echo "${indent}" >&2
+  echo "${indent}A path that is somebody else's has to be given to your own" >&2
+  echo "${indent}account first - HOW-TO.md says how - and then ./bootstrap.sh" >&2
+  echo "${indent}again." >&2
 }
 
 # --- the unprivileged half, which activation runs -----------------------------

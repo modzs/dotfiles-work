@@ -501,24 +501,6 @@ SUBSTITUTION_OPENERS = ("`", "$(")
 # x=`brew --prefix` is not.
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-# NAME=( or NAME+=( , which opens a bash array literal. Everything until the
-# closing paren is a word, never a command - that is what an array literal IS -
-# so a `brew` token inside one is an argument however far it sits from the
-# opener. The `in` rule cannot cover it: shlex emits a separator token for each
-# newline, so the entry on line four of a multi-line array has a newline before
-# it and not a path.
-#
-# This is the narrowest shape that works, and it stays fail-closed in the two
-# ways that matter. A bare `( brew install )` is a subshell rather than an array
-# - no assignment opens it - and is still flagged. And a command substitution
-# nested inside an array opens a group of its own, so `dirs=( $(brew list) )` is
-# caught inside an array exactly as it is outside one; that is what the stack in
-# the loop below is for, and both cases are fixture rows.
-#
-# lib/homebrew-initialize-prefix.sh is why this exists: it ports Homebrew's own
-# list of the directories a prefix needs, and `bin/brew` is one of them.
-ARRAY_OPENER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=$")
-
 INSTALLERS = (
     "raw.githubusercontent.com/homebrew",
     "homebrew/install",
@@ -552,22 +534,10 @@ for path in sys.argv[1:]:
         problems.append("%s: could not be tokenized (%s)" % (path, error))
         continue
     previous = "\n"
-    # A stack rather than a flag, because parens nest and only the innermost
-    # one decides. `dirs=( $(brew --prefix) )` opens an array and then opens a
-    # command substitution inside it, and the token `brew` belongs to the
-    # substitution - shlex splits `$(` into `$` and `(`, so without the stack
-    # that `brew` would inherit the array's permission and pass.
-    groups = []
     for token in tokens:
-        if token == "(":
-            groups.append("array" if ARRAY_OPENER.match(previous) else "other")
-        elif token == ")" and groups:
-            groups.pop()
-        in_array = bool(groups) and groups[-1] == "array"
         if command_name(token) in BANNED:
             argument = (
-                in_array
-                or ASSIGNMENT.match(token) is not None
+                ASSIGNMENT.match(token) is not None
                 or previous in ARGUMENT_INTRODUCERS
                 # The second and later paths in a word list, whose predecessor
                 # is the path before them.
@@ -679,9 +649,9 @@ test_the_homebrew_scan_tells_an_invocation_from_a_path_test() {
   # spelling that was once wrong or is a case the rule deliberately permits, so
   # a third narrowing has to break a named row rather than slip through a gap.
   #
-  # The array rows are the newest permission and come with their own near
-  # misses: a subshell looks like an array opener and is not one, and a command
-  # substitution inside an array is still an invocation.
+  # `subshell` and `arraysubst` are the two rows that pin the direction: a
+  # parenthesised group and a command substitution are both places a `brew` can
+  # hide, and both must stay flagged.
   script=$(dotfiles_write_brewscan) \
     || fail "could not write the Homebrew-invocation scanner"
   root=$(dotfiles_test_tmproot dotfiles-brewscan-fixtures)
@@ -723,8 +693,6 @@ flag arraysubst dirs=( $(brew --prefix) )
 pass pathtest [ -x /opt/homebrew/bin/brew ] && echo found
 pass wordlist for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$c" ]; done
 pass quotedlist searched="/opt/homebrew/bin/brew /usr/local/bin/brew"
-pass arraylist dirs=( bin etc var/homebrew/linked bin/brew ); echo "${dirs[@]}"
-pass arrayappend dirs+=( bin/brew ); echo "${dirs[@]}"
 MATRIX
 
   rm -f "$script"

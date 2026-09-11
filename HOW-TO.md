@@ -405,15 +405,16 @@ create one; creating it needs a password and belongs to `./bootstrap.sh`. Run
 `./bootstrap.sh` on this Mac. Everything Nix installs is already in place by
 then; only the formulae and casks are missing.
 
-**`<prefix> already holds directories that do not belong to your account`** -
-the prefix contains directories something else created, and this repo will not
-take them over. You will see this from `./bootstrap.sh` before anything is
-installed, or from a rebuild if the prefix stopped being yours after it was set
-up - a prefix set up for a different user reads the same way. The message lists
-the exact paths. Nothing has been changed either way.
+**`<prefix> cannot be given to your account`** - the message lists the exact
+paths and marks each one either `(missing)` or not. Nothing has been changed
+either way. You will see it from `./bootstrap.sh` before anything is installed,
+or from a rebuild if the prefix stopped being usable after it was set up. The
+two kinds of path have different fixes, and one message can list both.
 
-To continue, give those paths to your own account and run `./bootstrap.sh`
-again - for each path the message named:
+A path with no marking is a directory something else created, and this repo will
+not take it over - a prefix set up for a different user reads this way too. To
+continue, give each such path to your own account and run `./bootstrap.sh`
+again:
 
 ```sh
 sudo chown -R "$(whoami)" <path>
@@ -423,6 +424,18 @@ That is your decision to make and not this repo's, which is why it asks rather
 than doing it: on a Mac you share with software you did not install, a directory
 in `/usr/local` may belong to that software for a reason. If you would rather
 not, do not use this repo on this Mac.
+
+A path marked `(missing)` means the prefix still carries this repo's marker file
+but no longer holds what that marker promises. **Following Homebrew's own
+uninstall instructions on this Mac is how you get here** - they remove the
+prefix's directories, and the marker is not one of them. Delete the marker and
+run `./bootstrap.sh` again; it will ask for your password once and set the prefix
+up from scratch:
+
+```sh
+rm -f <prefix>/.managed_by_nix_darwin
+./bootstrap.sh
+```
 
 **`dotfiles-work: no Homebrew at ...`** - a rebuild got to the Brewfile step and
 found no `brew` to hand it to, which normally means the step before it did not

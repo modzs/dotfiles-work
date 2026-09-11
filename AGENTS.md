@@ -99,10 +99,24 @@ is no branch that takes one over, and adding one would be the same mistake as
 and `[ -x ]` are true of every path that exists - a probe written that way
 answered "writable" about directories the user could not touch, and the marker
 went down anyway, which left a prefix that could never be bootstrapped or rebuilt
-again. The marker is now written **only after the handover is verified**, so it
-is proof that the prefix is the user's rather than a record that the script
-reached the end, and `dotfiles_homebrew_prefix_state` will not say `managed`
-about a prefix the invoking account cannot use however many markers it carries.
+again. The marker is written **only after the handover is verified**, and what
+it means is the one invariant everything here turns on:
+
+> every path on `dotfiles_homebrew_prefix_directories`' list, plus the library,
+> exists and belongs to this account.
+
+Not "the script ran once", and not "nothing present is unusable" - both of those
+were tried and both re-opened the same loop, the second because a prefix whose
+`bin` had been *deleted* has nothing present to complain about. Following
+Homebrew's own uninstall instructions is how a real user gets there, and
+`ln` then died on a bare errno mid-switch. `dotfiles_homebrew_unusable` counts a
+missing path only when the marker is present, because before it nothing has been
+promised and a bare prefix is exactly what the privileged step is for; a path
+that is present and somebody else's counts either way. That asymmetry is read
+once, in that function, and `dotfiles_homebrew_prefix_state` is the only
+boundary any caller goes through - which is why the link step re-checks nothing
+and its `ln` cannot fail that way any more. Two lists would be two promises, so
+`lib/homebrew-initialize-prefix.sh` creates the list rather than restating it.
 
 The rule is enforced mechanically, not by memory. `tests/safety.test.sh` fails if
 the flake grows a nix-darwin input, if a system-level option namespace appears in
@@ -140,12 +154,12 @@ counts as an invocation unless something makes it an argument, and the list of
 those is short and belongs to this repo. The earlier shape asked the opposite,
 listing the tokens after which `brew` counted as a command, and `if brew`,
 `while brew`, `exec brew` and `command brew` all walked through the gaps in that
-list. The newest entry on the argument list is a bash array literal, which the
-ported prefix-directory lists needed while one of them still carried `bin/brew`
-(`lib/homebrew-initialize-prefix.sh` no longer does, since the branch that
-chowned pre-existing directories is gone, but the rule stays - the lists are
-upstream's and move); a nested command substitution opens a group of its own, so
-`dirs=( $(brew list) )` is still caught. Its remaining edge is
+list. That list stays as short as the repo's actual needs: an acceptance path is
+how the guard says yes, so one kept for a use that no longer exists is just a
+gap waiting for a real invocation. A bash-array acceptance lived there while a
+ported directory list still carried `bin/brew`; when that list went, so did the
+rule, and `dirs=( brew install )` is flagged again. Reinstating it is one commit
+whenever a real case comes back. Its remaining edge is
 indirection: a path held in a variable and run as `"$BREW" install` is still
 invisible to it. What keeps that from mattering is that no script here holds such
 a path - the preflight reports what it found instead of returning it - not that
@@ -159,10 +173,13 @@ explanation, or if a tool ends up installed by both Nix and Homebrew. It runs th
 prefix steps against a stand-in prefix in a temp directory - created, marked,
 re-run, linked, re-linked - and fails if an existing Homebrew is touched, if a
 second run rewrites the marker, if the unprivileged step needs root, or if it
-tries instead of refusing when the prefix is not ready. Two of those checks are
+tries instead of refusing when the prefix is not ready. Three of those checks are
 about the prefix it may not have: a directory the run cannot hand over must make
-it refuse **and leave no marker**, and a marked prefix the invoking account
-cannot use must not come back `managed`. They reach that state with a mode that
+it refuse **and leave no marker**; a marked prefix the invoking account cannot
+use must not come back `managed`; and a marked prefix whose `bin` and library
+have been deleted must be refused **with an explanation, never inside `ln`** -
+that one asserts the absence of `ln:` in the output, because a raw errno is the
+failure it exists to prevent. The first two reach that state with a mode that
 denies its own owner write, because creating a root-owned directory would need
 root and no test here may have it - the code decides both by ownership and mode,
 so one stands in for the other. The stand-in prefix is possible because the
@@ -210,10 +227,19 @@ documents that seam.
   `bootstrap.sh` creates the Homebrew prefix at step 5, after
   `flake_settings_check_machine` and before the switch, so by the time the
   password is asked for, every refusal the run can make has already been made.
-  It cannot be run end to end by a test - it installs Nix - so
-  `tests/bootstrap.test.sh` asserts that ordering against the script's source,
-  and says in place why that one check is allowed to read source when the rest
-  of the suite runs code.
+  **That ordering is deliberately not asserted by a test, and a grep is not an
+  acceptable substitute.** `tests/bootstrap.test.sh` once compared source line
+  numbers for `sudo`, the Nix installer and the switch. It was wrong in both
+  directions - moving the call into a function defined at the top fails it while
+  preserving the order, and wrapping the same line in `if false` passes it while
+  destroying it - so it was deleted rather than reworded. Do not re-add one. An
+  end-to-end harness is not the missing alternative either: what cannot be stood
+  in for is bootstrap.sh's own prefix *resolution*, which comes from `uname -m`
+  and then inspects the real `/opt/homebrew` or `/usr/local`, so the result
+  would depend on the machine running the suite. The library underneath it is
+  entirely stand-in-able and is where the privileged step is actually covered -
+  `tests/homebrew.test.sh` drives it against a temp-directory prefix. Keep
+  coverage at that layer, where it is honest.
 - **The Homebrew machinery, in the order a reader needs it.** `brew-src` is a
   pinned, non-flake input; `home.nix` patches the store copy (`patchedBrew`) and
   builds a launcher around it (`binBrew`); `lib/homebrew-initialize-prefix.sh`

@@ -141,18 +141,17 @@ for dir in "${directories[@]}"; do
   zsh_dirs+=("${HOMEBREW_PREFIX}/${dir}")
 done
 
-directories=(
-  bin etc include lib sbin share var opt
-  share/zsh share/zsh/site-functions
-  var/homebrew var/homebrew/linked
-  Cellar Caskroom Frameworks
-)
+# What to create, taken from lib/homebrew-present.sh rather than listed again
+# here. The marker this script writes at the end means "every path on that list
+# exists and belongs to the user", so a second copy of the list would be a
+# second promise: a prefix built from one and judged against the other would be
+# refused by the very next command that looked at it.
 mkdirs=()
-for dir in "${directories[@]}"; do
-  if ! [ -d "${HOMEBREW_PREFIX}/${dir}" ]; then
-    mkdirs+=("${HOMEBREW_PREFIX}/${dir}")
+while IFS= read -r dir; do
+  if ! [ -d "$dir" ]; then
+    mkdirs+=("$dir")
   fi
-done
+done < <(dotfiles_homebrew_prefix_directories "$HOMEBREW_PREFIX")
 
 user_chmods=()
 mkdirs_user_only=()
