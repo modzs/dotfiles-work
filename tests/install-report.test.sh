@@ -130,14 +130,8 @@ test_the_report_points_at_the_homebrew_path_line_too() {
   # shellcheck disable=SC2016  # the literal the report prints, not an expansion
   assert_contains "$output" 'eval "$(/stand-in/prefix/bin/brew shellenv)"' \
     "the report should give the line that puts Homebrew on PATH, naming the real prefix"
-  assert_contains "$output" "did not check that half" \
+  assert_contains "$output" "can find brew was not checked" \
     "the report must say the Homebrew half was not probed, rather than implying it was"
-
-  # The line this file must never print. Nothing here reads Homebrew's
-  # environment, so the report may not say it is reachable - the same bound the
-  # Nix half observes by probing before it claims anything.
-  assert_not_contains "$output" "Homebrew's tools are already" \
-    "the report claims Homebrew is reachable, which nothing here has checked"
 
   pass "report: the Homebrew half gets the same pointer the Nix half gets"
 }

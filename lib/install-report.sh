@@ -145,12 +145,12 @@ install_report_reachability_note() {
 
 # --- and the other half? ------------------------------------------------------
 #
-# The Homebrew counterpart to install_report_reachability_note, and deliberately
-# not the same shape. That one PROBES: it starts a login shell and looks at the
-# PATH it really gets. This one cannot, and must not pretend to. Nothing here
-# reads Homebrew's environment, and the note at the bottom of install_report
-# says why assuming in Homebrew's favour would be the one thing this file must
-# not do.
+# Everything the report says about Homebrew, in one place. The counterpart to
+# install_report_reachability_note, and deliberately not the same shape. That
+# one PROBES: it starts a login shell and looks at the PATH it really gets.
+# This one cannot, and must not pretend to. Nothing here reads Homebrew's
+# environment, and the note at the bottom of install_report says why assuming
+# in Homebrew's favour would be the one thing this file must not do.
 #
 # So it reports the one thing that is certain and needs no probe - that nothing
 # in this repository writes a PATH line for Homebrew, exactly as nothing writes
@@ -162,6 +162,10 @@ install_report_reachability_note() {
 # leaves a user who cannot find `brew` with no thread to pull, while the user
 # who cannot find `rg` gets a paragraph, a file to look at and a workaround.
 #
+# Every sentence here names its own subject. This paragraph used to open by
+# pointing back at a neighbouring bullet, and each rewording of one end left
+# the other end referring to something that was no longer there.
+#
 # $2 is the prefix, passed in rather than worked out. Which prefix this
 # architecture uses is lib/homebrew-present.sh's question and has exactly one
 # implementation; a second one here would be a second answer waiting to
@@ -171,12 +175,16 @@ install_report_reachability_note() {
 install_report_homebrew_path_note() {
   local indent=$1 prefix=$2
   printf '\n'
-  printf '%sThe same goes for Homebrew, and this did not check that half: the\n' "$indent"
-  printf '%sprobe above looks at ~/.nix-profile/bin and nothing else. Nothing\n' "$indent"
-  printf '%shere writes a PATH line for Homebrew either, and the prefix was set\n' "$indent"
-  printf '%sup by a script, so nothing has ever printed you one. If a new\n' "$indent"
-  printf '%sterminal cannot find the names on the Homebrew list, add to\n' "$indent"
-  printf '%s~/.zprofile:\n' "$indent"
+  printf '%sHomebrew came from here too, pinned by flake.lock, and it cannot\n' "$indent"
+  printf '%supdate itself. Nothing here ever asks it to remove anything, and\n' "$indent"
+  printf '%sREADME.md is exact about what those steps do and do not do.\n' "$indent"
+  printf '\n'
+  printf '%sWhether a new terminal can find brew was not checked: this run\n' "$indent"
+  printf '%sprobed ~/.nix-profile/bin and nothing else, and nothing here reads\n' "$indent"
+  printf '%sthe environment Homebrew sets. Nothing here writes a PATH line for\n' "$indent"
+  printf '%sHomebrew either, and the prefix was set up by a script, so nothing\n' "$indent"
+  printf '%shas ever printed you one. If a new terminal cannot find the names\n' "$indent"
+  printf '%son the Homebrew list, add to ~/.zprofile:\n' "$indent"
   printf '%s  eval "\044(%s/bin/brew shellenv)"\n' "$indent" "$prefix"
   printf '\n'
   printf '%sThe casks are unaffected - they are applications in /Applications.\n' "$indent"
@@ -274,16 +282,11 @@ install_report() {
   printf '%s  ls ~/.nix-profile/bin\n' "$indent"
   printf '%s  brew list\n' "$indent"
   printf '\n'
-  printf '%sTwo things that surprise people:\n' "$indent"
-  printf '%s  - What was installed came from two places, not one. The tools\n' "$indent"
-  printf '%s    above are from nixpkgs and live in your home directory; the\n' "$indent"
-  printf '%s    names on the Homebrew list went into the Homebrew prefix, and\n' "$indent"
-  printf '%s    the application casks to /Applications, where Spotlight finds\n' "$indent"
-  printf '%s    them like any other app.\n' "$indent"
-  printf '%s  - Homebrew came from here too, pinned by flake.lock, and it\n' "$indent"
-  printf '%s    cannot update itself. Nothing here ever asks it to remove\n' "$indent"
-  printf '%s    anything. README.md is exact about what those steps do and\n' "$indent"
-  printf '%s    do not do.\n' "$indent"
+  printf '%sWhat surprises people: what was installed came from two places,\n' "$indent"
+  printf '%snot one. The tools above are from nixpkgs and live in your home\n' "$indent"
+  printf '%sdirectory; the names on the Homebrew list went into the Homebrew\n' "$indent"
+  printf '%sprefix, and the application casks to /Applications, where\n' "$indent"
+  printf '%sSpotlight finds them like any other app.\n' "$indent"
 
   install_report_homebrew_path_note "$indent" "$prefix"
 
