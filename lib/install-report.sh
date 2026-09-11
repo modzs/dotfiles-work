@@ -281,9 +281,9 @@ install_report() {
   printf '%s    the application casks to /Applications, where Spotlight finds\n' "$indent"
   printf '%s    them like any other app.\n' "$indent"
   printf '%s  - Homebrew came from here too, pinned by flake.lock, and it\n' "$indent"
-  printf '%s    cannot update itself. It is not on this shell PATH either.\n' "$indent"
-  printf '%s    Nothing here ever asks it to remove anything. README.md is\n' "$indent"
-  printf '%s    exact about what those steps do and do not do.\n' "$indent"
+  printf '%s    cannot update itself. Nothing here ever asks it to remove\n' "$indent"
+  printf '%s    anything. README.md is exact about what those steps do and\n' "$indent"
+  printf '%s    do not do.\n' "$indent"
 
   install_report_homebrew_path_note "$indent" "$prefix"
 

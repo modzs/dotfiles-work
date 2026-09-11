@@ -16,6 +16,7 @@ gitconfig.work
 .DS_Store
 result
 result-*
+.flake-settings.*
 
 # no-mistakes local validation state - never commit in this public repo
 .no-mistakes/

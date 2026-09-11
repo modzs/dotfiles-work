@@ -148,6 +148,8 @@ flake_settings_write() {
   real=$(flake_settings_resolve "$file") || return 1
   mode=$(stat -f '%Lp' "$real") || return 1
   dir=$(dirname "$real")
+  # Beside the target on purpose, never in TMPDIR: rename is only atomic within
+  # one filesystem. See the note above this function before moving it.
   tmp=$(mktemp "$dir/.flake-settings.XXXXXX") || return 1
   awk -v key="$key" -v literal="$literal" '
     !written && $0 ~ "^[[:space:]]*" key " = [^;]*;" {
