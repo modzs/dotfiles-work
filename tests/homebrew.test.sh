@@ -56,7 +56,7 @@ dotfiles_test_parse_args "$@"
 # Every check this file must account for. test_summary fails if the number
 # that actually ran differs, so a check lost to a broken helper cannot show up
 # as a smaller, healthy-looking "ok" total. Move this when you add a test.
-dotfiles_test_expect 25
+dotfiles_test_expect 26
 
 SYSTEM=aarch64-darwin
 case "$(uname -m)" in
@@ -473,6 +473,26 @@ dotfiles_run_initializer() {
     "$prefix" "$prefix/Library" "$(whoami)" "$(id -gn)" 2>&1
 }
 
+# Run bootstrap.sh's preflight against a stand-in prefix, with HOMEBREW_PREFIX
+# set to $1 and the prefix to judge in $2.
+#
+# The environment is set explicitly rather than inherited, and that is not
+# tidiness. The preflight now asks dotfiles_homebrew_find whether this machine
+# already has a Homebrew somewhere other than the prefix it is about to set up,
+# and with HOMEBREW_PREFIX unset that search probes the real /opt/homebrew and
+# /usr/local. Inheriting it would make every check below answer differently on a
+# machine that happens to have Homebrew installed - which is every developer
+# machine and every CI runner. Pointing it at the stand-in is what keeps these
+# checks about their own fixture; the new check points it somewhere else on
+# purpose, which is the case it exists for.
+dotfiles_run_preflight() {
+  local env_prefix=$1 prefix=$2
+  # shellcheck disable=SC2016  # $1 and $2 are the inner shell's arguments
+  env HOMEBREW_PREFIX="$env_prefix" /bin/bash -c \
+    '. "$1/lib/homebrew-present.sh"; dotfiles_homebrew_preflight "$2" "$2/Library"' \
+    _ "$ROOT" "$prefix" 2>&1
+}
+
 test_the_privileged_step_creates_the_prefix_and_marks_it() {
   local prefix output status=0
 
@@ -639,8 +659,7 @@ test_a_marked_prefix_this_account_cannot_use_is_not_managed() {
   # Which is what stops the loop: the preflight is the branch that used to print
   # "already set up; no password needed" and move on, leaving the switch to fail
   # and send the user back to bootstrap.sh for ever.
-  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
-    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  output=$(dotfiles_run_preflight "$prefix" "$prefix") || status=$?
   [ "$status" != 0 ] \
     || fail "the preflight accepted a marked prefix this account cannot use"
   assert_not_contains "$output" "already set up" \
@@ -724,7 +743,7 @@ test_homebrews_own_pruning_does_not_lock_the_prefix() {
     || fail "could not prune the zsh directories the way Homebrew does"
 
   assert_eq "$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_state "$prefix" "$prefix/Library")" \
-    managed "a prefix Homebrew pruned its own directories out of is no longer usable"
+    managed "a prefix Homebrew pruned its own directories out of is no longer reported as managed"
 
   output=$(dotfiles_homebrew_lib dotfiles_homebrew_prefix_link \
     "$prefix" "$prefix/Library" /nix/store/unused-code /nix/store/unused-brew 2>&1) || status=$?
@@ -925,8 +944,7 @@ test_the_preflight_refuses_a_prefix_that_already_has_a_homebrew() {
   prefix=$(dotfiles_fresh_prefix)
   mkdir -p "$prefix/Library/Homebrew"
 
-  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
-    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  output=$(dotfiles_run_preflight "$prefix" "$prefix") || status=$?
 
   [ "$status" != 0 ] \
     || fail "the preflight accepted a prefix holding a Homebrew this repo did not install"
@@ -949,8 +967,7 @@ test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do() {
   # rather than being turned away.
   prefix=$(dotfiles_fresh_prefix)
 
-  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
-    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  output=$(dotfiles_run_preflight "$prefix" "$prefix") || status=$?
 
   [ "$status" = 0 ] \
     || fail "the preflight refused a Mac with no Homebrew, which is the machine this is for (exit $status)"
@@ -962,8 +979,7 @@ test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do() {
   # And the already-done case, which is what a re-run of bootstrap.sh sees.
   dotfiles_run_initializer "$prefix" >/dev/null \
     || fail "the initializer failed while preparing the fixture"
-  output=$(dotfiles_homebrew_lib dotfiles_homebrew_preflight \
-    "$prefix" "$prefix/Library" 2>&1) || status=$?
+  output=$(dotfiles_run_preflight "$prefix" "$prefix") || status=$?
   [ "$status" = 0 ] \
     || fail "the preflight refused a prefix it had already set up (exit $status)"
   assert_contains "$output" "already set up" \
@@ -972,6 +988,45 @@ test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do() {
     "the preflight still warns about a password on a prefix that needs none"
 
   pass "preflight: a Mac with no Homebrew is accepted, and told which step will ask for a password"
+}
+
+test_the_preflight_refuses_a_homebrew_outside_the_managed_prefix() {
+  local prefix foreign output status=0
+
+  # The Mac this repository is actually for, in the shape that used to slip
+  # through: an Apple silicon machine carrying an Intel Homebrew at /usr/local,
+  # with Homebrew's own `eval "$(/usr/local/bin/brew shellenv)"` line in its
+  # profile - which exports HOMEBREW_PREFIX. The prefix this configuration
+  # manages is decided by the architecture, so it is empty and looks fresh,
+  # while the Homebrew the shell actually reaches is somewhere else entirely.
+  #
+  # What used to happen: the preflight announced "no Homebrew in it", the run
+  # spent the one password creating a prefix, and the Brewfile step then
+  # followed HOMEBREW_PREFIX and installed every formula and cask into the OTHER
+  # Homebrew. No error anywhere, and the prefix the password paid for unused.
+  prefix=$(dotfiles_fresh_prefix)
+  foreign=$(dotfiles_fresh_prefix)
+  mkdir -p "$foreign/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$foreign/bin/brew"
+  chmod +x "$foreign/bin/brew"
+
+  output=$(dotfiles_run_preflight "$foreign" "$prefix") || status=$?
+
+  [ "$status" != 0 ] \
+    || fail "the preflight accepted a Mac whose Homebrew is outside the prefix this configuration manages"
+  assert_contains "$output" "$foreign/bin/brew" \
+    "the preflight does not name the Homebrew it found instead"
+  assert_contains "$output" "Nothing has been installed yet" \
+    "the preflight does not say that stopping here costs nothing"
+
+  # Refusing at the preflight is what makes it cost nothing: this runs before
+  # the Nix install and before step 5, so the prefix must be exactly as it was.
+  [ ! -e "$prefix/.managed_by_nix_darwin" ] \
+    || fail "the preflight marked the prefix it refused to set up"
+  [ ! -e "$prefix/bin" ] \
+    || fail "the preflight built out a prefix it refused to set up"
+
+  pass "preflight: a Homebrew outside the managed prefix is named and refused before any password"
 }
 
 # --- what is deliberately NOT tested about the prefix -------------------------
@@ -1430,6 +1485,7 @@ test_the_prefix_setup_step_refuses_a_homebrew_it_did_not_install
 test_the_prefix_state_tells_the_three_cases_apart
 test_the_preflight_refuses_a_prefix_that_already_has_a_homebrew
 test_the_preflight_accepts_a_mac_with_no_homebrew_and_says_what_it_will_do
+test_the_preflight_refuses_a_homebrew_outside_the_managed_prefix
 test_the_preflight_and_the_step_agree_on_where_brew_is
 test_a_missing_homebrew_fails_with_an_explanation
 test_the_prefix_the_setup_step_manages_is_this_architectures

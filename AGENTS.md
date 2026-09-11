@@ -224,6 +224,36 @@ two paths that do not exist - so do not reintroduce a second copy. Read both
 files before changing the structure of the configuration; they explain what each
 check asserts and why a grep would not do.
 
+The two questions are reconciled in exactly one place: **`dotfiles_homebrew_preflight`
+asks the second question before it asks the first**, and refuses when the two
+disagree. An Apple silicon Mac carrying an Intel Homebrew at `/usr/local` with
+that Homebrew's `shellenv` line in its profile has a Homebrew; a preflight that
+inspected only the architecture prefix said "no Homebrew in it", spent the
+password on a prefix nothing then used, and let the Brewfile step install every
+formula and cask into the other one without an error anywhere. The guard is
+`dotfiles_homebrew_find` compared against the managed prefix's own `bin/brew` -
+asking the search rather than reimplementing it, so it refuses exactly when the
+Brewfile step would have gone elsewhere.
+
+**That guard is deliberately at bootstrap only, and a second one must not be
+added to the Brewfile step.** The owner chose "name what you found and stop" over
+both carrying on with a warning and overriding the user's `HOMEBREW_PREFIX`, and
+the reason it belongs here is that here it costs nothing: nothing is installed,
+no password has been asked for, and choosing between two Homebrews is the user's
+decision. The residual is known and accepted rather than overlooked - a
+`shellenv` line added *after* a successful setup still redirects later rebuilds,
+and HOW-TO.md documents the symptom. Closing that would mean a second definition
+of the same rule in the step that writes, which is the shape every one of these
+rounds has had to undo.
+
+This is also why the preflight checks in `tests/homebrew.test.sh` set
+`HOMEBREW_PREFIX` explicitly rather than inheriting it: the preflight now reads
+it, and a suite that left it alone would answer differently on a machine that
+has Homebrew - which is every developer machine and every CI runner.
+`dotfiles_run_preflight` takes the environment's prefix and the prefix to judge
+as separate arguments for that reason, and the disagreement case is the one that
+passes two different ones.
+
 The second rule, which follows from the first: **no employer-specific content,
 ever**. No company names, domains, hostnames, proxy addresses, certificate paths
 or internal registry URLs - not in code, not in comments, not in examples. This

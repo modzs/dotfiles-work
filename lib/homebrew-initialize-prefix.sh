@@ -141,11 +141,19 @@ for dir in "${directories[@]}"; do
   zsh_dirs+=("${HOMEBREW_PREFIX}/${dir}")
 done
 
-# What to create, taken from lib/homebrew-present.sh rather than listed again
-# here. The marker this script writes at the end means "every path on that list
-# exists and belongs to the user", so a second copy of the list would be a
-# second promise: a prefix built from one and judged against the other would be
-# refused by the very next command that looked at it.
+# What this step CREATES, taken from lib/homebrew-present.sh rather than listed
+# again here. A second copy would be a second prefix layout: what that file
+# inspects for ownership is this same list, so a prefix built from one and
+# judged against the other would be refused by the very next command that
+# looked at it.
+#
+# This is NOT what the marker promises, and the difference is the whole reason
+# the prefix stopped locking itself out. The marker promises only that
+# $HOMEBREW_PREFIX/bin and the library exist and are the user's - Homebrew
+# deletes most of the rest itself once empty, so requiring them made a plain
+# `brew uninstall` unrecoverable without another password. Widening the list
+# below is fine; widening what dotfiles_homebrew_unusable requires to EXIST is
+# what reinstates that. Read the comment on that function before you do.
 mkdirs=()
 while IFS= read -r dir; do
   if ! [ -d "$dir" ]; then

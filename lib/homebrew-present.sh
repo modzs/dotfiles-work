@@ -314,6 +314,37 @@ dotfiles_homebrew_report_occupied() {
   echo "${indent}how at https://docs.brew.sh/FAQ - and run ./bootstrap.sh again." >&2
 }
 
+# What to tell a user whose Homebrew is somewhere other than the prefix this
+# configuration would manage. The third of these, and told the same way for the
+# same reason: same register, same "nothing has been changed", same "this is
+# your decision to make".
+#
+# $1 is the indent, $2 the prefix this configuration manages, $3 the launcher
+# that was found instead.
+dotfiles_homebrew_report_elsewhere() {
+  local indent=$1 prefix=$2 found=$3
+  echo "${indent}This Mac already has a Homebrew, and it is not in the prefix" >&2
+  echo "${indent}this configuration would manage. It is at:" >&2
+  echo "${indent}  $found" >&2
+  echo "${indent}" >&2
+  echo "${indent}This configuration installs its own Homebrew at $prefix," >&2
+  echo "${indent}which is the prefix your CPU architecture makes bottles and" >&2
+  echo "${indent}casks work in. Setting that up while another Homebrew is the" >&2
+  echo "${indent}one your shell reaches would leave you with two, and the" >&2
+  echo "${indent}Brewfile would go to that one rather than to the one the" >&2
+  echo "${indent}password you are about to be asked for paid for." >&2
+  echo "${indent}" >&2
+  echo "${indent}Nothing has been changed, and nothing here will remove or" >&2
+  echo "${indent}move a Homebrew it did not install - on a work Mac that is" >&2
+  echo "${indent}not a setup script's decision." >&2
+  echo "${indent}" >&2
+  echo "${indent}If you want this repository to manage Homebrew on this Mac," >&2
+  echo "${indent}uninstall that one yourself first - Homebrew documents how at" >&2
+  echo "${indent}https://docs.brew.sh/FAQ - along with the line in your shell" >&2
+  echo "${indent}profile that points HOMEBREW_PREFIX at it, and run" >&2
+  echo "${indent}./bootstrap.sh again." >&2
+}
+
 # What to tell a user whose prefix cannot be handed to their account. The same
 # news as the one above and told the same way, for the same reason: these two
 # refusals reach a user at the same three moments, and phrasing them differently
@@ -535,6 +566,41 @@ dotfiles_homebrew_find() {
 # nothing here holds one.
 dotfiles_homebrew_preflight() {
   local prefix=$1 library=$2 state found
+  # Named before it is compared, the same way dotfiles_homebrew_prefix_link
+  # names the paths it writes and for the same reason: tests/safety.test.sh
+  # reads a bare `"$prefix/bin/brew"` after `!=` as an invocation, and it is
+  # right to - widening that guard to recognise one more shape of comparison is
+  # a worse trade than naming the path.
+  local bin_brew="$prefix/bin/brew"
+
+  # Asked first, and it is the only question here that looks outside the prefix.
+  #
+  # Everything below judges $prefix alone, which is the right question for every
+  # step that writes - and the wrong question to open with. An Apple silicon Mac
+  # carrying an Intel Homebrew at /usr/local, with Homebrew's own
+  # `eval "$(/usr/local/bin/brew shellenv)"` line in its profile, has a Homebrew;
+  # a preflight that inspected /opt/homebrew alone announced "no Homebrew in it"
+  # and carried on. The password then bought a prefix nothing used, because the
+  # Brewfile step follows HOMEBREW_PREFIX and handed the whole list to the other
+  # Homebrew - silently, and into a prefix this repository does not manage.
+  #
+  # So: if this machine already has a usable Homebrew that is not ours, name it
+  # and stop. Deciding between two Homebrews is the user's call, and this is the
+  # moment it costs them nothing.
+  #
+  # dotfiles_homebrew_find is asked rather than reimplemented, so this refuses
+  # exactly when the Brewfile step would have gone elsewhere - the two cannot
+  # reach different answers about the same machine. It is asked once, and the
+  # `managed` branch below reuses the answer: by then it can only be empty or
+  # ours, which is what makes the line it prints true.
+  found=$(dotfiles_homebrew_find)
+  if [ -n "$found" ] && [ "$found" != "$bin_brew" ]; then
+    echo "ERROR: this Mac already has a Homebrew of its own." >&2
+    dotfiles_homebrew_report_elsewhere "       " "$prefix" "$found"
+    echo "       Nothing has been installed yet, so stopping here costs you" >&2
+    echo "       nothing." >&2
+    return 1
+  fi
 
   state=$(dotfiles_homebrew_prefix_state "$prefix" "$library") || return 1
 
@@ -560,7 +626,6 @@ dotfiles_homebrew_preflight() {
       ;;
     managed)
       echo "    $prefix is already set up for a Nix-managed Homebrew"
-      found=$(dotfiles_homebrew_find)
       if [ -n "$found" ]; then
         echo "    a rebuild will hand the Brewfile to $found"
       fi

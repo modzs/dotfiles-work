@@ -437,11 +437,32 @@ rm -f <prefix>/.managed_by_nix_darwin
 ./bootstrap.sh
 ```
 
+**`ERROR: this Mac already has a Homebrew of its own`, naming a path outside the
+prefix** - you have a Homebrew somewhere other than `/opt/homebrew` on Apple
+silicon or `/usr/local` on Intel. The usual cause is an Intel Homebrew still at
+`/usr/local` on a Mac that has since moved to Apple silicon. `./bootstrap.sh`
+stops before Nix is installed and before any password prompt, because setting up
+the standard prefix alongside it would leave you with two Homebrews and send the
+Brewfile to the wrong one. Uninstall the one you do not want -
+[docs.brew.sh](https://docs.brew.sh/FAQ) - remove its `brew shellenv` line from
+your shell profile, and run `./bootstrap.sh` again. Which one to keep is your
+call; this repo will not move or remove either.
+
 **`dotfiles-work: no Homebrew at ...`** - a rebuild got to the Brewfile step and
 found no `brew` to hand it to, which normally means the step before it did not
 run. Run `./bootstrap.sh`. If the prefix *is* set up, check `HOMEBREW_PREFIX`:
 this step trusts that variable when the environment sets it, and a stale value
 points it at the wrong place.
+
+**Formulae and casks land under a Homebrew prefix this repo did not set up** -
+a known behaviour, not a bug you have hit by accident. The Brewfile step asks
+`HOMEBREW_PREFIX` first, because that is Homebrew's own answer to "where am I".
+`./bootstrap.sh` checks that the answer is the prefix it manages and refuses if
+it is not - but it checks *at bootstrap*. If you add another Homebrew, or add a
+`brew shellenv` line pointing at one, **after** a successful setup, later
+rebuilds will follow it and install there: `brew list` under the managed prefix
+comes back empty while the packages appear under the other one. Either remove
+that line, or re-run `./bootstrap.sh`, which will name what it finds and stop.
 
 **A rebuild succeeds but `gh`, `herdr` or `brew` is not found** - they are
 installed, but your shell cannot see Homebrew's `bin` directory. This repo finds
