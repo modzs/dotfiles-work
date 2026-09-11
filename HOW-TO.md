@@ -152,17 +152,18 @@ ordering you did not choose, and `tests/homebrew.test.sh` fails if it happens.
 **If a change involves a new file in this repository, `git add` it first.** Nix
 builds a flake from what git tracks, so an edit to a file that is already
 tracked is picked up whether or not you have committed it - but a file you have
-just created is invisible to the build, and the error you get talks about a
-missing path rather than an untracked one. Split the lists into a second `.nix`
-file and import it, and the build says that file does not exist while it is
-sitting right there in `git status` under "Untracked files"; `git add` is the
-whole fix, and no commit is needed to try it. (Neovim's and wezterm's configs
-are the exception, and for a reason worth knowing: they are symlinked to this
-working tree rather than built into the store - see "Edit the neovim or wezterm
-configuration" below - so a new file there works untracked. Git will still lose
-it the day you move machines. This is also nothing to do with the untracked
-`~/.gitconfig.local` and `~/.zshrc.local` files below, which live in your home
-directory and are deliberately outside this repository.)
+just created is invisible to the build. Split the lists into a second `.nix`
+file and import it, and the build stops with `error: Path 'lists.nix' in the
+repository "/Users/you/.dotfiles" is not tracked by Git.`, then hands you the
+command: `To make it visible to Nix, run: git -C "/Users/you/.dotfiles" add
+"lists.nix"`. That is the whole fix, and no commit is needed to try it.
+(Neovim's and wezterm's configs are the exception, and for a reason worth
+knowing: they are symlinked to this working tree rather than built into the
+store - see "Edit the neovim or wezterm configuration" below - so a new file
+there works untracked. Git will still lose it the day you move machines. This
+is also nothing to do with the untracked `~/.gitconfig.local` and
+`~/.zshrc.local` files below, which live in your home directory and are
+deliberately outside this repository.)
 
 ### From Nix
 
